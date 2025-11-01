@@ -15,6 +15,8 @@ import hashlib
 from typing import List, Dict, Tuple, Optional, Union
 import time
 import warnings
+from . import data_mock  # Importar módulo de mock
+
 
 warnings.filterwarnings('ignore')
 
