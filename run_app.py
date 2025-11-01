@@ -267,6 +267,8 @@ def render_sidebar():
         st.caption(f"**Data:** {datetime.now().strftime('%d/%m/%Y')}")
         st.caption(f"**Ativos selecionados:** {len(st.session_state.selected_tickers)}")
 
+# Substituir a seção de navegação rápida no run_app.py
+
 def main():
     """Função principal do app."""
     initialize_session_state()
@@ -361,30 +363,19 @@ def main():
     decisões financeiras. Rentabilidade passada não garante resultados futuros.
     """)
     
-    # Navegação rápida
+    # Navegação rápida - CORREÇÃO AQUI
     st.markdown("### 🚀 Navegação Rápida")
     
-    col1, col2, col3, col4, col5 = st.columns(5)
+    # Usar links diretos para páginas (sem st.switch_page na home)
+    st.markdown("""
+    Use o menu lateral para navegar entre as páginas:
     
-    with col1:
-        if st.button("🎯 Selecionar Ativos", use_container_width=True):
-            st.switch_page("app/pages/01_Selecionar_Ativos.py")
-    
-    with col2:
-        if st.button("💸 Análise Dividendos", use_container_width=True):
-            st.switch_page("app/pages/02_Análise_de_Dividendos.py")
-    
-    with col3:
-        if st.button("📊 Portfólios", use_container_width=True):
-            st.switch_page("app/pages/03_Portfólios_Eficientes.py")
-    
-    with col4:
-        if st.button("🎯 Sharpe/MinVol", use_container_width=True):
-            st.switch_page("app/pages/04_Sharpe_e_MinVol.py")
-    
-    with col5:
-        if st.button("📋 Resumo", use_container_width=True):
-            st.switch_page("app/pages/05_Resumo_Executivo.py")
+    - 🎯 **Selecionar Ativos** - Escolha os ativos para análise
+    - 💸 **Análise de Dividendos** - Histórico e regularidade
+    - 📊 **Portfólios Eficientes** - Fronteira de Markowitz
+    - 🎯 **Sharpe e MinVol** - Otimizações específicas
+    - 📋 **Resumo Executivo** - Recomendação final
+    """)
     
     # Footer
     st.markdown("---")
