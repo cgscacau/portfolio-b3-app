@@ -1,5 +1,6 @@
 """
-Módulo de coleta, cache e processamento de dados da B3
+core/data.py
+Sistema completo de coleta, cache e limpeza de dados da B3
 """
 
 import streamlit as st
@@ -9,10 +10,13 @@ import numpy as np
 from datetime import datetime, timedelta
 from pathlib import Path
 import logging
-import time
-from typing import List, Dict, Tuple, Optional
-import hashlib
 import pickle
+import hashlib
+from typing import List, Dict, Tuple, Optional, Union
+import time
+import warnings
+
+warnings.filterwarnings('ignore')
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +25,7 @@ CACHE_DIR = Path("cache")
 CACHE_DIR.mkdir(exist_ok=True)
 
 ASSETS_DIR = Path("assets")
+B3_UNIVERSE_FILE = ASSETS_DIR / "b3_universe.csv"
 
 
 class DataCache:
@@ -31,32 +36,63 @@ class DataCache:
         self.cache_dir.mkdir(exist_ok=True)
     
     def get_cache_key(self, tickers: List[str], start_date: datetime, 
-                      end_date: datetime, data_type: str = "prices") -> str:
-        """Gera chave única para combinação de parâmetros."""
+                     end_date: datetime, data_type: str = "prices") -> str:
+        """
+        Gera chave única para combinação de parâmetros.
+        
+        Args:
+            tickers: Lista de tickers
+            start_date: Data inicial
+            end_date: Data final
+            data_type: Tipo de dado (prices, dividends, volume)
+        
+        Returns:
+            Hash MD5 único
+        """
         tickers_sorted = sorted(tickers)
-        key_string = f"{data_type}_{tickers_sorted}_{start_date}_{end_date}"
+        key_string = f"{data_type}_{tickers_sorted}_{start_date.date()}_{end_date.date()}"
         return hashlib.md5(key_string.encode()).hexdigest()
     
     def load_from_cache(self, cache_key: str, max_age_hours: int = 24) -> Optional[pd.DataFrame]:
-        """Carrega dados do cache se existirem e forem recentes."""
+        """
+        Carrega dados do cache se ainda válidos.
+        
+        Args:
+            cache_key: Chave do cache
+            max_age_hours: Idade máxima em horas
+        
+        Returns:
+            DataFrame ou None se não encontrado/expirado
+        """
         cache_file = self.cache_dir / f"{cache_key}.pkl"
         
-        if cache_file.exists():
-            age_hours = (time.time() - cache_file.stat().st_mtime) / 3600
-            
-            if age_hours < max_age_hours:
-                try:
-                    with open(cache_file, 'rb') as f:
-                        data = pickle.load(f)
-                    logger.info(f"Cache hit: {cache_key} (idade: {age_hours:.1f}h)")
-                    return data
-                except Exception as e:
-                    logger.warning(f"Erro ao carregar cache {cache_key}: {e}")
+        if not cache_file.exists():
+            return None
         
-        return None
+        # Verifica idade do arquivo
+        file_age_hours = (time.time() - cache_file.stat().st_mtime) / 3600
+        
+        if file_age_hours > max_age_hours:
+            logger.info(f"Cache expirado: {cache_key} ({file_age_hours:.1f}h)")
+            return None
+        
+        try:
+            with open(cache_file, 'rb') as f:
+                data = pickle.load(f)
+            logger.info(f"Cache carregado: {cache_key} ({file_age_hours:.1f}h)")
+            return data
+        except Exception as e:
+            logger.error(f"Erro ao carregar cache {cache_key}: {e}")
+            return None
     
     def save_to_cache(self, cache_key: str, data: pd.DataFrame):
-        """Salva dados no cache."""
+        """
+        Salva dados no cache.
+        
+        Args:
+            cache_key: Chave do cache
+            data: DataFrame a ser salvo
+        """
         cache_file = self.cache_dir / f"{cache_key}.pkl"
         
         try:
@@ -65,406 +101,789 @@ class DataCache:
             logger.info(f"Cache salvo: {cache_key}")
         except Exception as e:
             logger.error(f"Erro ao salvar cache {cache_key}: {e}")
+    
+    def clear_cache(self, older_than_hours: Optional[int] = None):
+        """
+        Limpa arquivos de cache.
+        
+        Args:
+            older_than_hours: Se especificado, remove apenas caches mais antigos
+        """
+        count = 0
+        for cache_file in self.cache_dir.glob("*.pkl"):
+            if older_than_hours:
+                file_age_hours = (time.time() - cache_file.stat().st_mtime) / 3600
+                if file_age_hours < older_than_hours:
+                    continue
+            
+            try:
+                cache_file.unlink()
+                count += 1
+            except Exception as e:
+                logger.error(f"Erro ao remover {cache_file}: {e}")
+        
+        logger.info(f"Cache limpo: {count} arquivos removidos")
+        return count
 
 
-# Instância global do cache
-data_cache = DataCache()
-
-
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=86400)  # Cache de 24 horas
 def load_ticker_universe() -> pd.DataFrame:
     """
-    Carrega universo de tickers da B3 com metadados.
+    Carrega universo de tickers B3 com metadados.
     
     Returns:
         DataFrame com colunas: ticker, nome, setor, subsetor, segmento_listagem, tipo
     """
     try:
-        universe_file = ASSETS_DIR / "b3_universe.csv"
-        
-        if not universe_file.exists():
-            logger.error(f"Arquivo {universe_file} não encontrado")
+        if not B3_UNIVERSE_FILE.exists():
+            logger.error(f"Arquivo não encontrado: {B3_UNIVERSE_FILE}")
+            st.error(f"❌ Arquivo de universo não encontrado: {B3_UNIVERSE_FILE}")
             return pd.DataFrame()
         
-        df = pd.read_csv(universe_file)
+        df = pd.read_csv(B3_UNIVERSE_FILE)
         
-        # Validação básica
-        required_cols = ['ticker', 'nome', 'setor', 'subsetor', 'segmento_listagem', 'tipo']
-        if not all(col in df.columns for col in required_cols):
-            logger.error(f"Colunas faltando no arquivo: {set(required_cols) - set(df.columns)}")
+        # Validar colunas esperadas
+        expected_cols = ['ticker', 'nome', 'setor', 'subsetor', 'segmento_listagem', 'tipo']
+        missing_cols = set(expected_cols) - set(df.columns)
+        
+        if missing_cols:
+            logger.error(f"Colunas faltando no arquivo: {missing_cols}")
+            st.error(f"❌ Arquivo de universo com formato inválido")
             return pd.DataFrame()
         
         logger.info(f"Universo carregado: {len(df)} tickers")
         return df
-        
+    
     except Exception as e:
         logger.error(f"Erro ao carregar universo: {e}")
+        st.error(f"❌ Erro ao carregar universo de tickers: {e}")
         return pd.DataFrame()
 
 
-def check_ticker_liquidity(ticker: str, min_sessions: int = 5, 
-                           min_avg_volume: float = 10000) -> Tuple[bool, Dict]:
+def filter_traded_last_30d(df: pd.DataFrame, min_sessions: int = 5, 
+                          min_avg_volume: float = 10000,
+                          show_progress: bool = True) -> pd.DataFrame:
     """
-    Verifica se um ticker teve negociação nos últimos 30 dias.
-    
-    Args:
-        ticker: Código do ativo
-        min_sessions: Número mínimo de sessões com volume > 0
-        min_avg_volume: Volume médio mínimo
-    
-    Returns:
-        (is_liquid, metrics_dict)
-    """
-    try:
-        data = yf.download(ticker, period="35d", progress=False, show_errors=False)
-        
-        if data.empty or len(data) < 5:
-            return False, {'sessions': 0, 'avg_volume': 0}
-        
-        sessions_traded = (data['Volume'] > 0).sum()
-        avg_volume = data['Volume'].mean()
-        
-        is_liquid = (sessions_traded >= min_sessions) and (avg_volume >= min_avg_volume)
-        
-        metrics = {
-            'sessions': int(sessions_traded),
-            'avg_volume': float(avg_volume),
-            'last_price': float(data['Close'].iloc[-1]) if len(data) > 0 else 0
-        }
-        
-        return is_liquid, metrics
-        
-    except Exception as e:
-        logger.warning(f"Erro ao verificar liquidez de {ticker}: {e}")
-        return False, {'sessions': 0, 'avg_volume': 0}
-
-
-@st.cache_data(ttl=21600)  # Cache de 6 horas
-def filter_traded_last_30d(df: pd.DataFrame, min_sessions: int = 5,
-                           min_avg_volume: float = 10000) -> pd.DataFrame:
-    """
-    Filtra DataFrame mantendo apenas tickers negociados nos últimos 30 dias.
+    Filtra ativos negociados nos últimos 30 dias com liquidez mínima.
     
     Args:
         df: DataFrame com coluna 'ticker'
-        min_sessions: Sessões mínimas com negociação
-        min_avg_volume: Volume médio mínimo
+        min_sessions: Número mínimo de sessões com negociação
+        min_avg_volume: Volume médio mínimo diário
+        show_progress: Se deve mostrar barra de progresso
     
     Returns:
-        DataFrame filtrado com colunas adicionais de liquidez
+        DataFrame filtrado com colunas adicionais:
+        - is_traded_30d: bool
+        - avg_volume_30d: float
+        - sessions_traded_30d: int
     """
     if df.empty:
         return df
     
-    tickers = df['ticker'].tolist()
+    df = df.copy()
+    df['is_traded_30d'] = False
+    df['avg_volume_30d'] = 0.0
+    df['sessions_traded_30d'] = 0
     
-    logger.info(f"Verificando liquidez de {len(tickers)} tickers...")
+    if show_progress:
+        progress_bar = st.progress(0)
+        status_text = st.empty()
     
-    # Progress bar para UX
-    progress_bar = st.progress(0)
-    status_text = st.empty()
+    total = len(df)
+    traded_count = 0
+    failed_tickers = []
     
-    liquid_tickers = []
-    liquidity_metrics = []
-    
-    for i, ticker in enumerate(tickers):
-        status_text.text(f"Verificando {ticker}... ({i+1}/{len(tickers)})")
+    for idx, row in df.iterrows():
+        ticker = row['ticker']
         
-        is_liquid, metrics = check_ticker_liquidity(ticker, min_sessions, min_avg_volume)
+        try:
+            if show_progress:
+                status_text.text(f"Verificando liquidez: {ticker} ({idx+1}/{total})")
+            
+            # Download dos últimos 35 dias para garantir 30 dias úteis
+            data = yf.download(
+                ticker, 
+                period="35d", 
+                progress=False, 
+                show_errors=False,
+                threads=False
+            )
+            
+            if not data.empty and 'Volume' in data.columns:
+                sessions_traded = (data['Volume'] > 0).sum()
+                avg_volume = data['Volume'].mean()
+                
+                df.at[idx, 'sessions_traded_30d'] = int(sessions_traded)
+                df.at[idx, 'avg_volume_30d'] = float(avg_volume)
+                
+                if sessions_traded >= min_sessions and avg_volume >= min_avg_volume:
+                    df.at[idx, 'is_traded_30d'] = True
+                    traded_count += 1
+            else:
+                failed_tickers.append(ticker)
+            
+        except Exception as e:
+            logger.warning(f"Erro ao verificar {ticker}: {e}")
+            failed_tickers.append(ticker)
+            continue
         
-        if is_liquid:
-            liquid_tickers.append(ticker)
-            liquidity_metrics.append(metrics)
-        
-        progress_bar.progress((i + 1) / len(tickers))
-        
-        # Rate limiting para não sobrecarregar API
-        if (i + 1) % 10 == 0:
-            time.sleep(1)
+        if show_progress:
+            progress_bar.progress((idx + 1) / total)
     
-    progress_bar.empty()
-    status_text.empty()
+    if show_progress:
+        progress_bar.empty()
+        status_text.empty()
     
-    # Filtrar DataFrame
-    df_filtered = df[df['ticker'].isin(liquid_tickers)].copy()
+    logger.info(f"Ativos líquidos (30d): {traded_count}/{total}")
     
-    # Adicionar métricas de liquidez
-    metrics_df = pd.DataFrame(liquidity_metrics, index=liquid_tickers)
-    df_filtered = df_filtered.set_index('ticker').join(metrics_df).reset_index()
+    if failed_tickers:
+        logger.warning(f"Falhas ao verificar {len(failed_tickers)} tickers: {failed_tickers[:5]}...")
     
-    logger.info(f"Tickers líquidos: {len(df_filtered)} de {len(df)}")
-    
-    return df_filtered
+    return df
 
 
-def batch_download_history(tickers: List[str], start_date: datetime,
-                           end_date: datetime, batch_size: int = 50) -> Dict[str, pd.DataFrame]:
+def batch_download_history(tickers: List[str], start: datetime, end: datetime,
+                           interval: str = "1d", batch_size: int = 50,
+                           show_progress: bool = True) -> Dict[str, pd.DataFrame]:
     """
-    Download de histórico de preços em lotes para melhor performance.
+    Download em lotes para melhor performance.
     
     Args:
         tickers: Lista de tickers
-        start_date: Data inicial
-        end_date: Data final
+        start: Data inicial
+        end: Data final
+        interval: Intervalo (1d, 1wk, 1mo)
         batch_size: Tamanho do lote
+        show_progress: Se deve mostrar progresso
     
     Returns:
-        Dict com ticker -> DataFrame de preços
+        Dicionário {ticker: DataFrame com OHLCV}
     """
     all_data = {}
-    
-    # Verificar cache primeiro
-    cache_key = data_cache.get_cache_key(tickers, start_date, end_date, "prices")
-    cached_data = data_cache.load_from_cache(cache_key)
-    
-    if cached_data is not None:
-        logger.info("Usando dados de preços do cache")
-        return cached_data
-    
-    logger.info(f"Baixando histórico de {len(tickers)} tickers...")
-    
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
     total_batches = (len(tickers) + batch_size - 1) // batch_size
     
-    for batch_idx in range(0, len(tickers), batch_size):
-        batch = tickers[batch_idx:batch_idx + batch_size]
-        batch_num = batch_idx // batch_size + 1
+    if show_progress:
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+    
+    for i in range(0, len(tickers), batch_size):
+        batch = tickers[i:i+batch_size]
+        batch_num = i // batch_size + 1
         
-        status_text.text(f"Baixando lote {batch_num}/{total_batches}...")
+        if show_progress:
+            status_text.text(f"Baixando lote {batch_num}/{total_batches} ({len(batch)} ativos)...")
         
         try:
-            # Download em grupo
-            ticker_string = " ".join(batch)
-            data = yf.download(
-                ticker_string,
-                start=start_date,
-                end=end_date,
-                progress=False,
-                show_errors=False,
-                group_by='ticker'
-            )
-            
-            # Processar dados
+            # Download do lote
             if len(batch) == 1:
-                # Caso especial: 1 ticker
-                ticker = batch[0]
+                # Caso especial: único ticker
+                data = yf.download(
+                    batch[0],
+                    start=start,
+                    end=end,
+                    interval=interval,
+                    progress=False,
+                    show_errors=False,
+                    threads=False
+                )
                 if not data.empty:
-                    all_data[ticker] = data
+                    all_data[batch[0]] = data
             else:
                 # Múltiplos tickers
+                ticker_string = " ".join(batch)
+                data = yf.download(
+                    ticker_string,
+                    start=start,
+                    end=end,
+                    interval=interval,
+                    group_by='ticker',
+                    progress=False,
+                    show_errors=False,
+                    threads=False
+                )
+                
+                # Processar dados por ticker
                 for ticker in batch:
                     try:
-                        ticker_data = data[ticker]
-                        if not ticker_data.empty and len(ticker_data) > 10:
-                            all_data[ticker] = ticker_data
+                        if ticker in data.columns.levels[0]:
+                            ticker_data = data[ticker]
+                            if not ticker_data.empty:
+                                all_data[ticker] = ticker_data
                     except (KeyError, AttributeError):
-                        logger.warning(f"Sem dados para {ticker}")
-            
-            progress_bar.progress(batch_num / total_batches)
-            
-            # Rate limiting
-            time.sleep(0.5)
-            
+                        # Ticker não tem dados ou estrutura diferente
+                        continue
+                    except Exception as e:
+                        logger.warning(f"Erro ao processar {ticker}: {e}")
+                        continue
+        
         except Exception as e:
             logger.error(f"Erro no lote {batch_num}: {e}")
-            continue
+            # Fallback: tentar individual
+            for ticker in batch:
+                try:
+                    data = yf.download(
+                        ticker, 
+                        start=start, 
+                        end=end, 
+                        interval=interval, 
+                        progress=False, 
+                        show_errors=False,
+                        threads=False
+                    )
+                    if not data.empty:
+                        all_data[ticker] = data
+                except Exception as e2:
+                    logger.warning(f"Falha individual em {ticker}: {e2}")
+                    continue
+        
+        if show_progress:
+            progress_bar.progress(min((i + batch_size) / len(tickers), 1.0))
     
-    progress_bar.empty()
-    status_text.empty()
+    if show_progress:
+        progress_bar.empty()
+        status_text.empty()
     
-    # Salvar no cache
-    if all_data:
-        data_cache.save_to_cache(cache_key, all_data)
-    
-    logger.info(f"Download concluído: {len(all_data)} tickers com dados")
+    logger.info(f"Download concluído: {len(all_data)}/{len(tickers)} ativos")
     
     return all_data
 
 
 @st.cache_data(ttl=3600)
-def get_price_history(tickers: List[str], start_date: datetime, 
-                      end_date: datetime) -> pd.DataFrame:
+def get_price_history(tickers: List[str], start: datetime, end: datetime,
+                     use_cache: bool = True) -> pd.DataFrame:
     """
-    Obtém histórico de preços ajustados para lista de tickers.
+    Obtém histórico de preços ajustados.
     
     Args:
         tickers: Lista de tickers
-        start_date: Data inicial
-        end_date: Data final
+        start: Data inicial
+        end: Data final
+        use_cache: Se deve usar cache em disco
     
     Returns:
-        DataFrame com MultiIndex (Date, Ticker) e colunas OHLCV
+        DataFrame com índice datetime e colunas = tickers (preços ajustados)
+    """
+    if not tickers:
+        logger.warning("Lista de tickers vazia")
+        return pd.DataFrame()
+    
+    cache_manager = DataCache()
+    cache_key = cache_manager.get_cache_key(tickers, start, end, "prices")
+    
+    # Tentar carregar do cache
+    if use_cache:
+        cached_data = cache_manager.load_from_cache(cache_key)
+        if cached_data is not None:
+            st.success(f"✅ Dados de preços carregados do cache ({len(cached_data)} dias)")
+            return cached_data
+    
+    # Download de dados
+    st.info(f"📥 Baixando histórico de preços para {len(tickers)} ativos...")
+    
+    all_data = batch_download_history(tickers, start, end)
+    
+    if not all_data:
+        st.error("❌ Nenhum dado disponível para os tickers selecionados")
+        return pd.DataFrame()
+    
+    # Consolidar em DataFrame único (preços ajustados)
+    prices_dict = {}
+    
+    for ticker, data in all_data.items():
+        if not data.empty:
+            # Tentar Adj Close, senão Close
+            if 'Adj Close' in data.columns:
+                prices_dict[ticker] = data['Adj Close']
+            elif 'Close' in data.columns:
+                prices_dict[ticker] = data['Close']
+                logger.warning(f"{ticker}: usando Close (Adj Close não disponível)")
+    
+    if not prices_dict:
+        st.warning("⚠️ Nenhum dado de preço disponível")
+        return pd.DataFrame()
+    
+    prices_df = pd.DataFrame(prices_dict)
+    
+    # Limpar dados
+    prices_df = prices_df.dropna(how='all')  # Remove dias sem nenhum dado
+    
+    # Ordenar por data
+    prices_df = prices_df.sort_index()
+    
+    # Salvar no cache
+    if use_cache and not prices_df.empty:
+        cache_manager.save_to_cache(cache_key, prices_df)
+    
+    st.success(f"✅ Histórico obtido: {len(prices_df)} dias, {len(prices_df.columns)} ativos")
+    
+    return prices_df
+
+
+@st.cache_data(ttl=3600)
+def get_volume_history(tickers: List[str], start: datetime, end: datetime,
+                      use_cache: bool = True) -> pd.DataFrame:
+    """
+    Obtém histórico de volume negociado.
+    
+    Args:
+        tickers: Lista de tickers
+        start: Data inicial
+        end: Data final
+        use_cache: Se deve usar cache
+    
+    Returns:
+        DataFrame com índice datetime e colunas = tickers (volume)
     """
     if not tickers:
         return pd.DataFrame()
     
-    # Download em lote
-    data_dict = batch_download_history(tickers, start_date, end_date)
+    cache_manager = DataCache()
+    cache_key = cache_manager.get_cache_key(tickers, start, end, "volume")
     
-    if not data_dict:
-        logger.warning("Nenhum dado de preço obtido")
+    # Tentar carregar do cache
+    if use_cache:
+        cached_data = cache_manager.load_from_cache(cache_key)
+        if cached_data is not None:
+            return cached_data
+    
+    st.info(f"📥 Baixando histórico de volume...")
+    
+    all_data = batch_download_history(tickers, start, end)
+    
+    volume_dict = {}
+    
+    for ticker, data in all_data.items():
+        if not data.empty and 'Volume' in data.columns:
+            volume_dict[ticker] = data['Volume']
+    
+    if not volume_dict:
         return pd.DataFrame()
     
-    # Consolidar em DataFrame único
-    dfs = []
+    volume_df = pd.DataFrame(volume_dict)
+    volume_df = volume_df.dropna(how='all')
+    volume_df = volume_df.sort_index()
     
-    for ticker, data in data_dict.items():
-        if data.empty:
-            continue
-        
-        df = data.copy()
-        df['Ticker'] = ticker
-        dfs.append(df)
+    # Salvar no cache
+    if use_cache and not volume_df.empty:
+        cache_manager.save_to_cache(cache_key, volume_df)
     
-    if not dfs:
-        return pd.DataFrame()
-    
-    result = pd.concat(dfs, axis=0)
-    result = result.reset_index()
-    
-    # Garantir colunas padronizadas
-    result.columns = [col[0] if isinstance(col, tuple) else col for col in result.columns]
-    
-    logger.info(f"Histórico consolidado: {len(result)} registros, {len(data_dict)} tickers")
-    
-    return result
+    return volume_df
 
 
-def get_dividends_history(tickers: List[str], start_date: datetime,
-                          end_date: datetime) -> Dict[str, pd.Series]:
+@st.cache_data(ttl=3600)
+def get_dividends(tickers: List[str], start: datetime, end: datetime,
+                 use_cache: bool = True) -> Dict[str, pd.Series]:
     """
-    Obtém histórico de dividendos para lista de tickers.
+    Obtém histórico de dividendos pagos.
     
     Args:
         tickers: Lista de tickers
-        start_date: Data inicial
-        end_date: Data final
+        start: Data inicial
+        end: Data final
+        use_cache: Se deve usar cache
     
     Returns:
-        Dict com ticker -> Series de dividendos (index=Date, values=dividend)
+        Dicionário {ticker: Series de dividendos com índice datetime}
     """
-    # Verificar cache
-    cache_key = data_cache.get_cache_key(tickers, start_date, end_date, "dividends")
-    cached_data = data_cache.load_from_cache(cache_key)
+    if not tickers:
+        return {}
     
-    if cached_data is not None:
-        logger.info("Usando dados de dividendos do cache")
-        return cached_data
+    cache_manager = DataCache()
+    cache_key = cache_manager.get_cache_key(tickers, start, end, "dividends")
     
-    logger.info(f"Baixando dividendos de {len(tickers)} tickers...")
+    # Tentar carregar do cache
+    if use_cache:
+        cached_data = cache_manager.load_from_cache(cache_key, max_age_hours=12)
+        if cached_data is not None:
+            st.success(f"✅ Dados de dividendos carregados do cache")
+            # Converter DataFrame de volta para dict de Series
+            return {col: cached_data[col].dropna() for col in cached_data.columns}
     
-    dividends_dict = {}
+    st.info(f"📥 Baixando histórico de dividendos para {len(tickers)} ativos...")
     
     progress_bar = st.progress(0)
     status_text = st.empty()
     
-    for i, ticker in enumerate(tickers):
-        status_text.text(f"Baixando dividendos: {ticker} ({i+1}/{len(tickers)})")
+    dividends_dict = {}
+    total = len(tickers)
+    success_count = 0
+    
+    for idx, ticker in enumerate(tickers):
+        status_text.text(f"Obtendo dividendos: {ticker} ({idx+1}/{total})")
         
         try:
             ticker_obj = yf.Ticker(ticker)
             divs = ticker_obj.dividends
             
-            if divs is not None and not divs.empty:
+            if not divs.empty:
                 # Filtrar por período
-                divs = divs[(divs.index >= start_date) & (divs.index <= end_date)]
+                divs = divs[(divs.index >= start) & (divs.index <= end)]
                 
                 if not divs.empty:
                     dividends_dict[ticker] = divs
-            
+                    success_count += 1
+        
         except Exception as e:
             logger.warning(f"Erro ao obter dividendos de {ticker}: {e}")
+            continue
         
-        progress_bar.progress((i + 1) / len(tickers))
-        
-        # Rate limiting
-        if (i + 1) % 10 == 0:
-            time.sleep(0.5)
+        progress_bar.progress((idx + 1) / total)
     
     progress_bar.empty()
     status_text.empty()
     
-    # Salvar no cache
+    # Consolidar em DataFrame para cache
     if dividends_dict:
-        data_cache.save_to_cache(cache_key, dividends_dict)
-    
-    logger.info(f"Dividendos obtidos: {len(dividends_dict)} tickers")
+        # Criar DataFrame alinhado por data
+        all_dates = pd.DatetimeIndex([])
+        for series in dividends_dict.values():
+            all_dates = all_dates.union(series.index)
+        
+        divs_df = pd.DataFrame(index=all_dates.sort_values())
+        for ticker, series in dividends_dict.items():
+            divs_df[ticker] = series
+        
+        if use_cache:
+            cache_manager.save_to_cache(cache_key, divs_df)
+        
+        st.success(f"✅ Dividendos obtidos: {success_count}/{total} ativos com pagamentos")
+    else:
+        st.warning("⚠️ Nenhum dividendo encontrado no período selecionado")
     
     return dividends_dict
 
 
-@st.cache_data(ttl=3600)
-def get_latest_prices(tickers: List[str]) -> Dict[str, float]:
+@st.cache_data(ttl=1800)  # Cache de 30 minutos
+def get_current_prices(tickers: List[str]) -> Dict[str, float]:
     """
-    Obtém preços mais recentes para lista de tickers.
+    Obtém preços atuais (último fechamento disponível).
     
     Args:
         tickers: Lista de tickers
     
     Returns:
-        Dict com ticker -> preço_atual
+        Dicionário {ticker: preço}
     """
+    if not tickers:
+        return {}
+    
     prices = {}
     
-    logger.info(f"Obtendo preços atuais de {len(tickers)} tickers...")
+    # Usar período curto para pegar último preço
+    end = datetime.now()
+    start = end - timedelta(days=7)
     
-    for ticker in tickers:
-        try:
-            ticker_obj = yf.Ticker(ticker)
-            hist = ticker_obj.history(period="5d")
+    st.info("📥 Obtendo preços atuais...")
+    
+    all_data = batch_download_history(tickers, start, end, show_progress=False)
+    
+    for ticker, data in all_data.items():
+        if not data.empty:
+            # Tentar Adj Close, senão Close
+            if 'Adj Close' in data.columns:
+                last_price = data['Adj Close'].iloc[-1]
+            elif 'Close' in data.columns:
+                last_price = data['Close'].iloc[-1]
+            else:
+                continue
             
-            if not hist.empty:
-                prices[ticker] = float(hist['Close'].iloc[-1])
-        except Exception as e:
-            logger.warning(f"Erro ao obter preço de {ticker}: {e}")
+            if not np.isnan(last_price):
+                prices[ticker] = float(last_price)
     
-    logger.info(f"Preços obtidos: {len(prices)} tickers")
+    st.success(f"✅ Preços obtidos para {len(prices)} ativos")
     
     return prices
 
 
-def validate_data_quality(price_data: pd.DataFrame, 
-                         min_data_points: int = 252) -> Tuple[bool, List[str]]:
+def validate_data_quality(prices_df: pd.DataFrame, 
+                         min_data_points: int = 252,
+                         max_missing_pct: float = 0.1) -> Tuple[pd.DataFrame, List[str], Dict[str, str]]:
     """
-    Valida qualidade dos dados de preços.
+    Valida qualidade dos dados e remove ativos com dados insuficientes.
     
     Args:
-        price_data: DataFrame com histórico de preços
-        min_data_points: Mínimo de pontos necessários
+        prices_df: DataFrame de preços
+        min_data_points: Número mínimo de pontos de dados
+        max_missing_pct: Percentual máximo de dados faltantes permitido
     
     Returns:
-        (is_valid, list_of_issues)
+        Tuple (DataFrame limpo, lista de tickers removidos, dict de razões)
     """
-    issues = []
+    if prices_df.empty:
+        return prices_df, [], {}
     
-    if price_data.empty:
-        issues.append("DataFrame vazio")
-        return False, issues
+    removed_tickers = []
+    removal_reasons = {}
     
-    # Verificar quantidade de dados
-    tickers = price_data['Ticker'].unique()
+    total_days = len(prices_df)
     
-    for ticker in tickers:
-        ticker_data = price_data[price_data['Ticker'] == ticker]
+    for col in prices_df.columns:
+        valid_points = prices_df[col].notna().sum()
+        missing_pct = 1 - (valid_points / total_days)
         
-        if len(ticker_data) < min_data_points:
-            issues.append(f"{ticker}: apenas {len(ticker_data)} pontos (mínimo {min_data_points})")
+        # Verificar número mínimo de pontos
+        if valid_points < min_data_points:
+            removed_tickers.append(col)
+            removal_reasons[col] = f"Dados insuficientes: {valid_points} pontos (mín: {min_data_points})"
+            logger.warning(f"Removido {col}: apenas {valid_points} pontos válidos")
+            continue
         
-        # Verificar valores nulos
-        null_count = ticker_data['Close'].isnull().sum()
-        if null_count > 0:
-            issues.append(f"{ticker}: {null_count} valores nulos em Close")
+        # Verificar percentual de dados faltantes
+        if missing_pct > max_missing_pct:
+            removed_tickers.append(col)
+            removal_reasons[col] = f"Muitos dados faltantes: {missing_pct*100:.1f}% (máx: {max_missing_pct*100:.1f}%)"
+            logger.warning(f"Removido {col}: {missing_pct*100:.1f}% de dados faltantes")
+            continue
+    
+    # Remover colunas com dados insuficientes
+    clean_df = prices_df.drop(columns=removed_tickers, errors='ignore')
+    
+    if clean_df.empty:
+        st.error("❌ Todos os ativos foram removidos por dados insuficientes")
+        return clean_df, removed_tickers, removal_reasons
+    
+    # Forward fill para preencher gaps pequenos (máx 5 dias consecutivos)
+    clean_df = clean_df.fillna(method='ffill', limit=5)
+    
+    # Remover linhas ainda com NaN (início da série)
+    clean_df = clean_df.dropna(how='any')
+    
+    if removed_tickers:
+        st.warning(f"⚠️ {len(removed_tickers)} ativos removidos por qualidade de dados insuficiente")
         
-        # Verificar valores zerados
-        zero_count = (ticker_data['Close'] == 0).sum()
-        if zero_count > 0:
-            issues.append(f"{ticker}: {zero_count} valores zerados em Close")
+        with st.expander("Ver detalhes dos ativos removidos"):
+            for ticker, reason in removal_reasons.items():
+                st.text(f"• {ticker}: {reason}")
     
-    is_valid = len(issues) == 0
+    return clean_df, removed_tickers, removal_reasons
+
+
+@st.cache_data(ttl=3600)
+def get_ticker_info(ticker: str) -> Dict:
+    """
+    Obtém informações detalhadas de um ticker.
     
-    if not is_valid:
-        logger.warning(f"Problemas de qualidade encontrados: {len(issues)}")
+    Args:
+        ticker: Ticker do ativo
     
-    return is_valid, issues
+    Returns:
+        Dicionário com informações do ativo
+    """
+    try:
+        ticker_obj = yf.Ticker(ticker)
+        info = ticker_obj.info
+        
+        # Extrair campos relevantes
+        relevant_info = {
+            'shortName': info.get('shortName', ticker),
+            'longName': info.get('longName', ''),
+            'sector': info.get('sector', ''),
+            'industry': info.get('industry', ''),
+            'marketCap': info.get('marketCap', 0),
+            'currency': info.get('currency', 'BRL'),
+            'exchange': info.get('exchange', 'SAO'),
+            'quoteType': info.get('quoteType', ''),
+            'dividendYield': info.get('dividendYield', 0),
+            'trailingPE': info.get('trailingPE', None),
+            'forwardPE': info.get('forwardPE', None),
+            'beta': info.get('beta', None),
+            'fiftyTwoWeekHigh': info.get('fiftyTwoWeekHigh', None),
+            'fiftyTwoWeekLow': info.get('fiftyTwoWeekLow', None),
+        }
+        
+        return relevant_info
+    
+    except Exception as e:
+        logger.error(f"Erro ao obter info de {ticker}: {e}")
+        return {'shortName': ticker, 'error': str(e)}
+
+
+def get_multiple_ticker_info(tickers: List[str], show_progress: bool = True) -> pd.DataFrame:
+    """
+    Obtém informações de múltiplos tickers.
+    
+    Args:
+        tickers: Lista de tickers
+        show_progress: Se deve mostrar progresso
+    
+    Returns:
+        DataFrame com informações dos ativos
+    """
+    if not tickers:
+        return pd.DataFrame()
+    
+    if show_progress:
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+    
+    info_list = []
+    
+    for idx, ticker in enumerate(tickers):
+        if show_progress:
+            status_text.text(f"Obtendo informações: {ticker} ({idx+1}/{len(tickers)})")
+        
+        info = get_ticker_info(ticker)
+        info['ticker'] = ticker
+        info_list.append(info)
+        
+        if show_progress:
+            progress_bar.progress((idx + 1) / len(tickers))
+    
+    if show_progress:
+        progress_bar.empty()
+        status_text.empty()
+    
+    df = pd.DataFrame(info_list)
+    
+    return df
+
+
+def calculate_returns(prices_df: pd.DataFrame, method: str = 'simple') -> pd.DataFrame:
+    """
+    Calcula retornos diários.
+    
+    Args:
+        prices_df: DataFrame de preços
+        method: 'simple' ou 'log'
+    
+    Returns:
+        DataFrame de retornos
+    """
+    if prices_df.empty:
+        return pd.DataFrame()
+    
+    if method == 'log':
+        returns = np.log(prices_df / prices_df.shift(1))
+    else:  # simple
+        returns = prices_df.pct_change()
+    
+    returns = returns.dropna()
+    
+    return returns
+
+
+def resample_prices(prices_df: pd.DataFrame, frequency: str = 'W') -> pd.DataFrame:
+    """
+    Reamostra preços para frequência diferente.
+    
+    Args:
+        prices_df: DataFrame de preços diários
+        frequency: 'W' (semanal), 'M' (mensal), 'Q' (trimestral), 'Y' (anual)
+    
+    Returns:
+        DataFrame reamostrado
+    """
+    if prices_df.empty:
+        return pd.DataFrame()
+    
+    # Usar último preço do período
+    resampled = prices_df.resample(frequency).last()
+    resampled = resampled.dropna(how='all')
+    
+    return resampled
+
+
+def get_data_summary(prices_df: pd.DataFrame, dividends_dict: Dict[str, pd.Series]) -> pd.DataFrame:
+    """
+    Cria resumo estatístico dos dados coletados.
+    
+    Args:
+        prices_df: DataFrame de preços
+        dividends_dict: Dicionário de dividendos
+    
+    Returns:
+        DataFrame com resumo por ativo
+    """
+    if prices_df.empty:
+        return pd.DataFrame()
+    
+    summary_data = []
+    
+    for ticker in prices_df.columns:
+        prices = prices_df[ticker].dropna()
+        
+        summary = {
+            'ticker': ticker,
+            'data_points': len(prices),
+            'first_date': prices.index[0].strftime('%Y-%m-%d'),
+            'last_date': prices.index[-1].strftime('%Y-%m-%d'),
+            'first_price': prices.iloc[0],
+            'last_price': prices.iloc[-1],
+            'min_price': prices.min(),
+            'max_price': prices.max(),
+            'avg_price': prices.mean(),
+            'price_std': prices.std(),
+            'has_dividends': ticker in dividends_dict,
+            'num_dividends': len(dividends_dict.get(ticker, [])),
+        }
+        
+        summary_data.append(summary)
+    
+    summary_df = pd.DataFrame(summary_data)
+    
+    return summary_df
+
+
+# Funções auxiliares para debugging e manutenção
+
+def check_data_integrity(prices_df: pd.DataFrame) -> Dict[str, any]:
+    """
+    Verifica integridade dos dados.
+    
+    Returns:
+        Dicionário com estatísticas de integridade
+    """
+    if prices_df.empty:
+        return {'status': 'empty'}
+    
+    integrity = {
+        'total_tickers': len(prices_df.columns),
+        'total_days': len(prices_df),
+        'missing_values': prices_df.isna().sum().sum(),
+        'missing_pct': (prices_df.isna().sum().sum() / prices_df.size) * 100,
+        'tickers_with_missing': (prices_df.isna().any()).sum(),
+        'date_range': f"{prices_df.index[0].date()} to {prices_df.index[-1].date()}",
+        'duplicated_dates': prices_df.index.duplicated().sum(),
+    }
+    
+    return integrity
+
+
+def export_data_to_csv(prices_df: pd.DataFrame, filename: str = "prices_export.csv"):
+    """
+    Exporta dados para CSV.
+    
+    Args:
+        prices_df: DataFrame a exportar
+        filename: Nome do arquivo
+    """
+    try:
+        prices_df.to_csv(filename)
+        logger.info(f"Dados exportados para {filename}")
+        return True
+    except Exception as e:
+        logger.error(f"Erro ao exportar dados: {e}")
+        return False
+
+
+# Inicialização e verificação do módulo
+def verify_module():
+    """Verifica se o módulo está configurado corretamente."""
+    checks = {
+        'cache_dir_exists': CACHE_DIR.exists(),
+        'assets_dir_exists': ASSETS_DIR.exists(),
+        'universe_file_exists': B3_UNIVERSE_FILE.exists(),
+    }
+    
+    all_ok = all(checks.values())
+    
+    if not all_ok:
+        logger.warning(f"Verificação do módulo data.py: {checks}")
+    
+    return all_ok
+
+
+# Executar verificação ao importar
+if __name__ != "__main__":
+    verify_module()
