@@ -1,0 +1,108 @@
+ticker,nome,setor,subsetor,segmento_listagem,tipo
+PETR4.SA,Petrobras PN,Petróleo e Gás,Exploração e Refino,Novo Mercado,PN
+PETR3.SA,Petrobras ON,Petróleo e Gás,Exploração e Refino,Novo Mercado,ON
+VALE3.SA,Vale ON,Mineração,Minerais Metálicos,Novo Mercado,ON
+ITUB4.SA,Itaú Unibanco PN,Financeiro,Bancos,Nível 1,PN
+BBDC4.SA,Bradesco PN,Financeiro,Bancos,Nível 1,PN
+BBDC3.SA,Bradesco ON,Financeiro,Bancos,Nível 1,ON
+BBAS3.SA,Banco do Brasil ON,Financeiro,Bancos,Novo Mercado,ON
+ABEV3.SA,Ambev ON,Consumo,Bebidas,Nível 1,ON
+WEGE3.SA,WEG ON,Industrial,Máquinas e Equipamentos,Novo Mercado,ON
+RENT3.SA,Localiza ON,Consumo Cíclico,Aluguel de Carros,Novo Mercado,ON
+RAIL3.SA,Rumo ON,Industrial,Transporte,Novo Mercado,ON
+B3SA3.SA,B3 ON,Financeiro,Serviços Financeiros,Novo Mercado,ON
+SUZB3.SA,Suzano ON,Materiais Básicos,Papel e Celulose,Novo Mercado,ON
+JBSS3.SA,JBS ON,Consumo,Alimentos,Novo Mercado,ON
+MGLU3.SA,Magazine Luiza ON,Consumo Cíclico,Comércio,Novo Mercado,ON
+LREN3.SA,Lojas Renner ON,Consumo Cíclico,Comércio,Novo Mercado,ON
+VIVT3.SA,Telefônica Brasil ON,Telecomunicações,Telefonia Fixa,Nível 1,ON
+ELET3.SA,Eletrobras ON,Utilidade Pública,Energia Elétrica,Novo Mercado,ON
+ELET6.SA,Eletrobras PNB,Utilidade Pública,Energia Elétrica,Novo Mercado,PNB
+CMIG4.SA,Cemig PN,Utilidade Pública,Energia Elétrica,Nível 1,PN
+CPLE6.SA,Copel PNB,Utilidade Pública,Energia Elétrica,Nível 1,PNB
+GGBR4.SA,Gerdau PN,Materiais Básicos,Siderurgia,Nível 1,PN
+CSNA3.SA,CSN ON,Materiais Básicos,Siderurgia,Nível 1,ON
+USIM5.SA,Usiminas PNA,Materiais Básicos,Siderurgia,Nível 1,PNA
+EMBR3.SA,Embraer ON,Industrial,Aeronáutica,Novo Mercado,ON
+RADL3.SA,Raia Drogasil ON,Saúde,Comércio e Distribuição,Novo Mercado,ON
+HAPV3.SA,Hapvida ON,Saúde,Serviços Médicos,Novo Mercado,ON
+KLBN11.SA,Klabin Unit,Materiais Básicos,Papel e Celulose,Nível 2,UNIT
+BEEF3.SA,Minerva ON,Consumo,Alimentos,Novo Mercado,ON
+BRFS3.SA,BRF ON,Consumo,Alimentos,Novo Mercado,ON
+PRIO3.SA,Prio ON,Petróleo e Gás,Exploração e Refino,Novo Mercado,ON
+CSAN3.SA,Cosan ON,Petróleo e Gás,Combustíveis,Novo Mercado,ON
+RAIZ4.SA,Raízen PN,Petróleo e Gás,Combustíveis,Novo Mercado,PN
+UGPA3.SA,Ultrapar ON,Petróleo e Gás,Combustíveis,Nível 1,ON
+EQTL3.SA,Equatorial ON,Utilidade Pública,Energia Elétrica,Novo Mercado,ON
+TAEE11.SA,Taesa Unit,Utilidade Pública,Energia Elétrica,Nível 2,UNIT
+TRPL4.SA,Tran Paulist PN,Utilidade Pública,Energia Elétrica,Nível 1,PN
+SBSP3.SA,Sabesp ON,Utilidade Pública,Água e Saneamento,Novo Mercado,ON
+CSMG3.SA,Copasa ON,Utilidade Pública,Água e Saneamento,Nível 1,ON
+SANB11.SA,Santander Unit,Financeiro,Bancos,Nível 2,UNIT
+BPAC11.SA,BTG Pactual Unit,Financeiro,Bancos,Nível 2,UNIT
+IRBR3.SA,IRB Brasil ON,Financeiro,Seguros,Novo Mercado,ON
+BBSE3.SA,BB Seguridade ON,Financeiro,Seguros,Novo Mercado,ON
+CVCB3.SA,CVC Brasil ON,Consumo Cíclico,Viagens e Turismo,Novo Mercado,ON
+AZUL4.SA,Azul PN,Industrial,Transporte Aéreo,Nível 2,PN
+GOLL4.SA,Gol PN,Industrial,Transporte Aéreo,Nível 2,PN
+CCRO3.SA,CCR ON,Industrial,Concessões Rodoviárias,Novo Mercado,ON
+CYRE3.SA,Cyrela ON,Consumo Cíclico,Construção Civil,Novo Mercado,ON
+MRFG3.SA,Marfrig ON,Consumo,Alimentos,Novo Mercado,ON
+NTCO3.SA,Natura ON,Consumo,Cosméticos,Novo Mercado,ON
+PCAR3.SA,GPA ON,Consumo,Comércio,Nível 1,ON
+CRFB3.SA,Carrefour Brasil ON,Consumo,Comércio,Novo Mercado,ON
+ASAI3.SA,Assaí ON,Consumo,Comércio,Novo Mercado,ON
+VBBR3.SA,Vibra ON,Petróleo e Gás,Combustíveis,Novo Mercado,ON
+RECV3.SA,PetroRecôncavo ON,Petróleo e Gás,Exploração e Refino,Novo Mercado,ON
+RRRP3.SA,3R Petroleum ON,Petróleo e Gás,Exploração e Refino,Novo Mercado,ON
+ENEV3.SA,Eneva ON,Utilidade Pública,Energia Elétrica,Novo Mercado,ON
+ENGI11.SA,Energisa Unit,Utilidade Pública,Energia Elétrica,Nível 2,UNIT
+CPFE3.SA,CPFL Energia ON,Utilidade Pública,Energia Elétrica,Novo Mercado,ON
+NEOE3.SA,Neoenergia ON,Utilidade Pública,Energia Elétrica,Novo Mercado,ON
+AURE3.SA,Auren ON,Utilidade Pública,Energia Elétrica,Novo Mercado,ON
+TIMS3.SA,TIM ON,Telecomunicações,Telefonia Móvel,Novo Mercado,ON
+OIBR3.SA,Oi ON,Telecomunicações,Telefonia Fixa,Tradicional,ON
+ALPA4.SA,Alpargatas PN,Consumo Cíclico,Calçados,Nível 1,PN
+GRND3.SA,Grendene ON,Consumo Cíclico,Calçados,Novo Mercado,ON
+SOMA3.SA,Grupo Soma ON,Consumo Cíclico,Vestuário,Novo Mercado,ON
+ARZZ3.SA,Arezzo ON,Consumo Cíclico,Calçados,Novo Mercado,ON
+PETZ3.SA,Petz ON,Consumo Cíclico,Comércio,Novo Mercado,ON
+YDUQ3.SA,Yduqs ON,Educação,Ensino Superior,Novo Mercado,ON
+COGN3.SA,Cogna ON,Educação,Ensino Superior,Novo Mercado,ON
+VIVA3.SA,Vivara ON,Consumo Cíclico,Joalheria,Novo Mercado,ON
+LWSA3.SA,Locaweb ON,Tecnologia,Software e Serviços,Novo Mercado,ON
+POSI3.SA,Positivo ON,Tecnologia,Computadores,Novo Mercado,ON
+TOTS3.SA,Totvs ON,Tecnologia,Software e Serviços,Novo Mercado,ON
+MDIA3.SA,M.Dias Branco ON,Consumo,Alimentos,Novo Mercado,ON
+SMTO3.SA,São Martinho ON,Consumo,Açúcar e Álcool,Novo Mercado,ON
+SLCE3.SA,SLC Agrícola ON,Consumo,Agricultura,Novo Mercado,ON
+AGRO3.SA,BrasilAgro ON,Consumo,Agricultura,Novo Mercado,ON
+BRML3.SA,BR Malls ON,Financeiro,Exploração de Imóveis,Novo Mercado,ON
+IGTI11.SA,Iguatemi Unit,Financeiro,Exploração de Imóveis,Nível 2,UNIT
+MULT3.SA,Multiplan ON,Financeiro,Exploração de Imóveis,Nível 2,ON
+MRVE3.SA,MRV ON,Consumo Cíclico,Construção Civil,Novo Mercado,ON
+TEND3.SA,Tenda ON,Consumo Cíclico,Construção Civil,Novo Mercado,ON
+EVEN3.SA,Even ON,Consumo Cíclico,Construção Civil,Novo Mercado,ON
+JHSF3.SA,JHSF ON,Consumo Cíclico,Construção Civil,Novo Mercado,ON
+EZTC3.SA,Ez Tec ON,Consumo Cíclico,Construção Civil,Novo Mercado,ON
+DXCO3.SA,Dexco ON,Materiais Básicos,Materiais de Construção,Novo Mercado,ON
+KLBN4.SA,Klabin PN,Materiais Básicos,Papel e Celulose,Nível 1,PN
+GOAU4.SA,Gerdau Met PN,Materiais Básicos,Siderurgia,Nível 1,PN
+BRAP4.SA,Bradespar PN,Holdings,Holdings Diversificadas,Nível 1,PN
+STBP3.SA,Santos Brasil ON,Industrial,Transporte,Novo Mercado,ON
+LOGN3.SA,Log-In ON,Industrial,Transporte,Novo Mercado,ON
+TGMA3.SA,Tegma ON,Industrial,Transporte,Novo Mercado,ON
+POMO4.SA,Marcopolo PN,Industrial,Veículos,Nível 2,PN
+RAPT4.SA,Randon PN,Industrial,Veículos,Nível 1,PN
+SIMH3.SA,Simpar ON,Industrial,Holdings,Novo Mercado,ON
+MOVI3.SA,Movida ON,Consumo Cíclico,Aluguel de Carros,Novo Mercado,ON
+LCAM3.SA,Locamerica ON,Consumo Cíclico,Aluguel de Carros,Novo Mercado,ON
+MEAL3.SA,IMC ON,Consumo Cíclico,Restaurantes,Novo Mercado,ON
+PNVL3.SA,Dimed ON,Saúde,Comércio e Distribuição,Novo Mercado,ON
+FLRY3.SA,Fleury ON,Saúde,Serviços Médicos,Novo Mercado,ON
+GNDI3.SA,NotreDame ON,Saúde,Serviços Médicos,Novo Mercado,ON
+QUAL3.SA,Qualicorp ON,Saúde,Serviços Médicos,Novo Mercado,ON
+ODPV3.SA,Odontoprev ON,Saúde,Serviços Médicos,Novo Mercado,ON
+HYPE3.SA,Hypera ON,Saúde,Medicamentos,Novo Mercado,ON
+PFRM3.SA,Profarma ON,Saúde,Comércio e Distribuição,Novo Mercado,ON
+BLAU3.SA,Blau ON,Saúde,Medicamentos,Novo Mercado,ON
