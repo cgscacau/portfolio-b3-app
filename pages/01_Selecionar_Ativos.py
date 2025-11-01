@@ -71,6 +71,24 @@ def apply_liquidity_filter():
         st.warning("⚠️ Carregue o universo de ativos primeiro")
         return
     
+    # Explicação dos valores
+    with st.expander("ℹ️ Como interpretar o volume?", expanded=False):
+        st.markdown("""
+        O volume é medido em **número de ações negociadas por dia**.
+        
+        **Referência de liquidez:**
+        - **Muito Baixa**: < 100.000 ações/dia
+        - **Baixa**: 100.000 - 1.000.000 ações/dia
+        - **Média**: 1.000.000 - 10.000.000 ações/dia
+        - **Alta**: 10.000.000 - 50.000.000 ações/dia
+        - **Muito Alta (Blue Chips)**: > 50.000.000 ações/dia
+        
+        **Exemplos típicos:**
+        - PETR4, VALE3, ITUB4: 100-500 milhões de ações/dia
+        - Ações médias: 1-10 milhões de ações/dia
+        - Small caps: < 1 milhão de ações/dia
+        """)
+    
     col1, col2 = st.columns(2)
     
     with col1:
@@ -84,15 +102,43 @@ def apply_liquidity_filter():
         )
     
     with col2:
-        min_volume = st.number_input(
-            "Volume médio mínimo:",
-            min_value=0,
-            max_value=10000000,
-            value=10000,
-            step=10000,
-            help="Volume médio diário mínimo",
-            key="liquidity_min_volume"
+        # Selector de nível de liquidez
+        liquidity_level = st.selectbox(
+            "Nível de liquidez desejado:",
+            [
+                "Muito Baixa (> 10.000)",
+                "Baixa (> 100.000)",
+                "Média (> 1.000.000)",
+                "Alta (> 10.000.000)",
+                "Muito Alta - Blue Chips (> 50.000.000)",
+                "Personalizado"
+            ],
+            index=2,  # Padrão: Média
+            help="Selecione o nível de liquidez mínimo"
         )
+        
+        # Mapear para valores
+        liquidity_map = {
+            "Muito Baixa (> 10.000)": 10000,
+            "Baixa (> 100.000)": 100000,
+            "Média (> 1.000.000)": 1000000,
+            "Alta (> 10.000.000)": 10000000,
+            "Muito Alta - Blue Chips (> 50.000.000)": 50000000,
+        }
+        
+        if liquidity_level == "Personalizado":
+            min_volume = st.number_input(
+                "Volume médio mínimo (ações/dia):",
+                min_value=1000,
+                max_value=1000000000,
+                value=1000000,
+                step=100000,
+                format="%d",
+                help="Volume médio diário mínimo em número de ações"
+            )
+        else:
+            min_volume = liquidity_map[liquidity_level]
+            st.info(f"📊 Volume mínimo: **{min_volume:,.0f}** ações/dia")
     
     if st.button("🔍 Aplicar Filtro de Liquidez", use_container_width=True, type="primary", key="apply_liquidity"):
         
@@ -111,8 +157,8 @@ def apply_liquidity_filter():
             st.session_state.filtered_universe_df = traded_df
             st.session_state.liquidity_applied = True
             
-            # Estatísticas
-            col1, col2, col3 = st.columns(3)
+            # Estatísticas detalhadas
+            col1, col2, col3, col4 = st.columns(4)
             
             with col1:
                 st.metric("Total no Universo", len(universe_df))
@@ -124,10 +170,35 @@ def apply_liquidity_filter():
                 pct = (len(traded_df) / len(universe_df) * 100) if len(universe_df) > 0 else 0
                 st.metric("% Aprovado", f"{pct:.1f}%")
             
+            with col4:
+                if len(traded_df) > 0:
+                    avg_vol = traded_df['avg_volume_30d'].mean()
+                    st.metric("Volume Médio", f"{avg_vol/1e6:.1f}M")
+                else:
+                    st.metric("Volume Médio", "N/A")
+            
             if len(traded_df) > 0:
                 st.success(f"✅ {len(traded_df)} ativos líquidos identificados!")
+                
+                # Mostrar top 10 mais líquidos
+                with st.expander("🔥 Top 10 Mais Líquidos", expanded=False):
+                    top10 = traded_df.nlargest(10, 'avg_volume_30d')[
+                        ['ticker', 'nome', 'avg_volume_30d', 'sessions_traded_30d']
+                    ].copy()
+                    
+                    top10['avg_volume_30d'] = top10['avg_volume_30d'].apply(
+                        lambda x: f"{x/1e6:.2f}M ações/dia"
+                    )
+                    
+                    top10.columns = ['Ticker', 'Nome', 'Volume Médio', 'Sessões']
+                    
+                    st.dataframe(top10, use_container_width=True)
             else:
                 st.warning("⚠️ Nenhum ativo atende aos critérios de liquidez. Tente reduzir os limites.")
+                
+                # Sugestão automática
+                if min_volume > 100000:
+                    st.info(f"💡 Sugestão: Tente com volume mínimo de 100.000 ações/dia")
 
 
 def show_simple_filters():
