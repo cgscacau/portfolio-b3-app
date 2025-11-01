@@ -161,21 +161,26 @@ def load_ticker_universe() -> pd.DataFrame:
 
 
 def filter_traded_last_30d(df: pd.DataFrame, min_sessions: int = 5, 
-                          min_avg_volume: float = 10000,
+                          min_avg_volume: float = 100000,  # CORRIGIDO: valor mais realista
                           show_progress: bool = True) -> pd.DataFrame:
     """
     Filtra ativos negociados nos últimos 30 dias com liquidez mínima.
     
     Args:
         df: DataFrame com coluna 'ticker'
-        min_sessions: Número mínimo de sessões com negociação
-        min_avg_volume: Volume médio mínimo diário
+        min_sessions: Número mínimo de sessões com negociação (padrão: 5)
+        min_avg_volume: Volume médio mínimo diário em ações (padrão: 100.000)
+                       Valores típicos:
+                       - 100.000 = baixa liquidez
+                       - 1.000.000 = média liquidez  
+                       - 10.000.000 = alta liquidez
+                       - Blue chips: > 50.000.000
         show_progress: Se deve mostrar barra de progresso
     
     Returns:
         DataFrame filtrado com colunas adicionais:
         - is_traded_30d: bool
-        - avg_volume_30d: float
+        - avg_volume_30d: float (volume médio em ações)
         - sessions_traded_30d: int
     """
     if df.empty:
@@ -211,8 +216,11 @@ def filter_traded_last_30d(df: pd.DataFrame, min_sessions: int = 5,
             )
             
             if not data.empty and 'Volume' in data.columns:
-                sessions_traded = (data['Volume'] > 0).sum()
-                avg_volume = data['Volume'].mean()
+                # Filtrar apenas sessões com volume > 0
+                valid_sessions = data[data['Volume'] > 0]
+                
+                sessions_traded = len(valid_sessions)
+                avg_volume = valid_sessions['Volume'].mean() if len(valid_sessions) > 0 else 0
                 
                 df.at[idx, 'sessions_traded_30d'] = int(sessions_traded)
                 df.at[idx, 'avg_volume_30d'] = float(avg_volume)
@@ -238,7 +246,7 @@ def filter_traded_last_30d(df: pd.DataFrame, min_sessions: int = 5,
     logger.info(f"Ativos líquidos (30d): {traded_count}/{total}")
     
     if failed_tickers:
-        logger.warning(f"Falhas ao verificar {len(failed_tickers)} tickers: {failed_tickers[:5]}...")
+        logger.warning(f"Falhas ao verificar {len(failed_tickers)} tickers")
     
     return df
 
