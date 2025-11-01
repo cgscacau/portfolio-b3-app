@@ -1,6 +1,7 @@
 """
 core/data.py
 Sistema completo de coleta, cache e limpeza de dados da B3
+Inclui fallback para dados simulados quando yfinance falhar
 """
 
 import streamlit as st
@@ -15,8 +16,6 @@ import hashlib
 from typing import List, Dict, Tuple, Optional, Union
 import time
 import warnings
-from . import data_mock  # Importar módulo de mock
-
 
 warnings.filterwarnings('ignore')
 
@@ -128,6 +127,115 @@ class DataCache:
         return count
 
 
+# ============================================================================
+# FUNÇÕES DE DADOS SIMULADOS (MOCK)
+# ============================================================================
+
+BLUE_CHIPS = [
+    'PETR4.SA', 'PETR3.SA', 'VALE3.SA', 'ITUB4.SA', 'BBDC4.SA', 
+    'BBDC3.SA', 'BBAS3.SA', 'ABEV3.SA', 'WEGE3.SA', 'RENT3.SA',
+    'B3SA3.SA', 'SUZB3.SA', 'RAIL3.SA', 'ELET3.SA', 'CMIG4.SA'
+]
+
+def generate_mock_liquidity_data(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Gera dados simulados de liquidez baseados em características conhecidas.
+    """
+    df = df.copy()
+    
+    for idx, row in df.iterrows():
+        ticker = row['ticker']
+        setor = row.get('setor', '')
+        
+        # Determinar perfil de liquidez
+        if ticker in BLUE_CHIPS:
+            # Blue chips: altíssima liquidez
+            avg_volume = np.random.uniform(50e6, 300e6)
+            sessions = np.random.randint(20, 23)
+            is_traded = True
+        
+        elif setor in ['Financeiro', 'Petróleo e Gás', 'Mineração']:
+            # Setores líquidos: alta liquidez
+            avg_volume = np.random.uniform(5e6, 50e6)
+            sessions = np.random.randint(18, 23)
+            is_traded = np.random.random() > 0.1  # 90% líquidos
+        
+        elif setor in ['Energia Elétrica', 'Saneamento', 'Telecomunicações']:
+            # Setores moderados: média liquidez
+            avg_volume = np.random.uniform(1e6, 10e6)
+            sessions = np.random.randint(15, 22)
+            is_traded = np.random.random() > 0.2  # 80% líquidos
+        
+        else:
+            # Outros setores: liquidez variável
+            avg_volume = np.random.uniform(100e3, 5e6)
+            sessions = np.random.randint(10, 22)
+            is_traded = np.random.random() > 0.3  # 70% líquidos
+        
+        df.at[idx, 'is_traded_30d'] = is_traded
+        df.at[idx, 'avg_volume_30d'] = avg_volume
+        df.at[idx, 'sessions_traded_30d'] = sessions
+    
+    return df
+
+
+def generate_mock_price_data(tickers: list, start: datetime, end: datetime) -> pd.DataFrame:
+    """
+    Gera série temporal simulada de preços.
+    """
+    dates = pd.date_range(start=start, end=end, freq='B')  # Business days
+    
+    prices = {}
+    
+    for ticker in tickers:
+        # Preço inicial aleatório
+        initial_price = np.random.uniform(10, 100)
+        
+        # Simular retornos diários com drift positivo
+        n_days = len(dates)
+        returns = np.random.normal(0.0003, 0.015, n_days)  # drift=0.03%/dia, vol=1.5%/dia
+        
+        # Gerar série de preços
+        price_series = initial_price * np.exp(np.cumsum(returns))
+        
+        prices[ticker] = price_series
+    
+    df = pd.DataFrame(prices, index=dates)
+    
+    return df
+
+
+def generate_mock_dividend_data(tickers: list, start: datetime, end: datetime) -> dict:
+    """
+    Gera histórico simulado de dividendos.
+    """
+    dividends_dict = {}
+    
+    for ticker in tickers:
+        # Decidir se paga dividendos (75% pagam)
+        if np.random.random() > 0.25:
+            # Número de pagamentos no período (trimestral ou semestral)
+            months = (end - start).days / 30
+            n_payments = int(np.random.uniform(2, min(months/3, 12)))
+            
+            if n_payments > 0:
+                # Datas aleatórias distribuídas ao longo do período
+                date_range = pd.date_range(start=start, end=end, periods=n_payments)
+                
+                # Valores aleatórios (mais consistentes)
+                base_value = np.random.uniform(0.2, 1.5)
+                values = base_value * (1 + np.random.normal(0, 0.2, n_payments))
+                values = np.abs(values)  # Garantir positivos
+                
+                dividends_dict[ticker] = pd.Series(values, index=date_range)
+    
+    return dividends_dict
+
+
+# ============================================================================
+# FUNÇÕES PRINCIPAIS DE DADOS
+# ============================================================================
+
 @st.cache_data(ttl=86400)  # Cache de 24 horas
 def load_ticker_universe() -> pd.DataFrame:
     """
@@ -163,30 +271,30 @@ def load_ticker_universe() -> pd.DataFrame:
 
 
 def filter_traded_last_30d(df: pd.DataFrame, min_sessions: int = 5, 
-                          min_avg_volume: float = 100000,  # CORRIGIDO: valor mais realista
-                          show_progress: bool = True) -> pd.DataFrame:
+                          min_avg_volume: float = 100000,
+                          show_progress: bool = True,
+                          use_mock: bool = False) -> pd.DataFrame:
     """
     Filtra ativos negociados nos últimos 30 dias com liquidez mínima.
     
     Args:
         df: DataFrame com coluna 'ticker'
-        min_sessions: Número mínimo de sessões com negociação (padrão: 5)
-        min_avg_volume: Volume médio mínimo diário em ações (padrão: 100.000)
-                       Valores típicos:
-                       - 100.000 = baixa liquidez
-                       - 1.000.000 = média liquidez  
-                       - 10.000.000 = alta liquidez
-                       - Blue chips: > 50.000.000
+        min_sessions: Número mínimo de sessões com negociação
+        min_avg_volume: Volume médio mínimo diário
         show_progress: Se deve mostrar barra de progresso
+        use_mock: Se True, usa dados simulados
     
     Returns:
-        DataFrame filtrado com colunas adicionais:
-        - is_traded_30d: bool
-        - avg_volume_30d: float (volume médio em ações)
-        - sessions_traded_30d: int
+        DataFrame filtrado com colunas adicionais
     """
     if df.empty:
         return df
+    
+    # Modo mock
+    if use_mock:
+        logger.info("Usando dados simulados de liquidez")
+        st.info("🎲 Usando dados simulados para teste")
+        return generate_mock_liquidity_data(df)
     
     df = df.copy()
     df['is_traded_30d'] = False
@@ -199,26 +307,37 @@ def filter_traded_last_30d(df: pd.DataFrame, min_sessions: int = 5,
     
     total = len(df)
     traded_count = 0
-    failed_tickers = []
+    failed_count = 0
     
     for idx, row in df.iterrows():
         ticker = row['ticker']
         
         try:
             if show_progress:
-                status_text.text(f"Verificando liquidez: {ticker} ({idx+1}/{total})")
+                status_text.text(f"Verificando: {ticker} ({idx+1}/{total})")
             
-            # Download dos últimos 35 dias para garantir 30 dias úteis
-            data = yf.download(
-                ticker, 
-                period="35d", 
-                progress=False, 
-                show_errors=False,
-                threads=False
-            )
+            # Tentar download com retry
+            max_retries = 2
+            data = None
             
-            if not data.empty and 'Volume' in data.columns:
-                # Filtrar apenas sessões com volume > 0
+            for attempt in range(max_retries):
+                try:
+                    data = yf.download(
+                        ticker,
+                        period="1mo",
+                        progress=False,
+                        show_errors=False
+                    )
+                    
+                    if not data.empty:
+                        break
+                    
+                except Exception as e:
+                    if attempt == max_retries - 1:
+                        logger.warning(f"Falha após {max_retries} tentativas: {ticker}")
+                    time.sleep(0.5)  # Pequena pausa entre tentativas
+            
+            if data is not None and not data.empty and 'Volume' in data.columns:
                 valid_sessions = data[data['Volume'] > 0]
                 
                 sessions_traded = len(valid_sessions)
@@ -231,31 +350,55 @@ def filter_traded_last_30d(df: pd.DataFrame, min_sessions: int = 5,
                     df.at[idx, 'is_traded_30d'] = True
                     traded_count += 1
             else:
-                failed_tickers.append(ticker)
+                failed_count += 1
             
         except Exception as e:
             logger.warning(f"Erro ao verificar {ticker}: {e}")
-            failed_tickers.append(ticker)
+            failed_count += 1
             continue
         
         if show_progress:
             progress_bar.progress((idx + 1) / total)
+        
+        # Se muitos erros consecutivos, oferecer fallback
+        if failed_count > 20 and idx > 30 and traded_count == 0:
+            if show_progress:
+                progress_bar.empty()
+                status_text.empty()
+            
+            st.error(f"❌ Muitas falhas no download ({failed_count}/{idx+1}). yfinance pode estar indisponível.")
+            
+            use_mock_fallback = st.button(
+                "🎲 Usar Dados Simulados em Vez Disso", 
+                key="fallback_to_mock",
+                type="primary"
+            )
+            
+            if use_mock_fallback:
+                st.info("Gerando dados simulados...")
+                return generate_mock_liquidity_data(df)
+            
+            st.stop()
     
     if show_progress:
         progress_bar.empty()
         status_text.empty()
     
-    logger.info(f"Ativos líquidos (30d): {traded_count}/{total}")
+    logger.info(f"Ativos líquidos: {traded_count}/{total}, Falhas: {failed_count}")
     
-    if failed_tickers:
-        logger.warning(f"Falhas ao verificar {len(failed_tickers)} tickers")
+    # Se TODOS ou quase todos falharam, usar mock automaticamente
+    if traded_count == 0 and failed_count > total * 0.8:
+        st.warning("⚠️ yfinance não está respondendo. Usando dados simulados automaticamente.")
+        time.sleep(1)
+        return generate_mock_liquidity_data(df)
     
     return df
 
 
 def batch_download_history(tickers: List[str], start: datetime, end: datetime,
                            interval: str = "1d", batch_size: int = 50,
-                           show_progress: bool = True) -> Dict[str, pd.DataFrame]:
+                           show_progress: bool = True,
+                           use_mock: bool = False) -> Dict[str, pd.DataFrame]:
     """
     Download em lotes para melhor performance.
     
@@ -266,10 +409,32 @@ def batch_download_history(tickers: List[str], start: datetime, end: datetime,
         interval: Intervalo (1d, 1wk, 1mo)
         batch_size: Tamanho do lote
         show_progress: Se deve mostrar progresso
+        use_mock: Se True, usa dados simulados
     
     Returns:
         Dicionário {ticker: DataFrame com OHLCV}
     """
+    # Modo mock
+    if use_mock:
+        logger.info("Usando dados simulados de preços")
+        mock_prices = generate_mock_price_data(tickers, start, end)
+        
+        # Converter para formato esperado
+        result = {}
+        for ticker in tickers:
+            if ticker in mock_prices.columns:
+                df = pd.DataFrame({
+                    'Open': mock_prices[ticker],
+                    'High': mock_prices[ticker] * 1.02,
+                    'Low': mock_prices[ticker] * 0.98,
+                    'Close': mock_prices[ticker],
+                    'Adj Close': mock_prices[ticker],
+                    'Volume': np.random.randint(1e6, 100e6, len(mock_prices))
+                })
+                result[ticker] = df
+        
+        return result
+    
     all_data = {}
     total_batches = (len(tickers) + batch_size - 1) // batch_size
     
@@ -285,7 +450,6 @@ def batch_download_history(tickers: List[str], start: datetime, end: datetime,
             status_text.text(f"Baixando lote {batch_num}/{total_batches} ({len(batch)} ativos)...")
         
         try:
-            # Download do lote
             if len(batch) == 1:
                 # Caso especial: único ticker
                 data = yf.download(
@@ -321,7 +485,6 @@ def batch_download_history(tickers: List[str], start: datetime, end: datetime,
                             if not ticker_data.empty:
                                 all_data[ticker] = ticker_data
                     except (KeyError, AttributeError):
-                        # Ticker não tem dados ou estrutura diferente
                         continue
                     except Exception as e:
                         logger.warning(f"Erro ao processar {ticker}: {e}")
@@ -349,6 +512,9 @@ def batch_download_history(tickers: List[str], start: datetime, end: datetime,
         
         if show_progress:
             progress_bar.progress(min((i + batch_size) / len(tickers), 1.0))
+        
+        # Pequena pausa entre lotes
+        time.sleep(0.3)
     
     if show_progress:
         progress_bar.empty()
@@ -361,7 +527,7 @@ def batch_download_history(tickers: List[str], start: datetime, end: datetime,
 
 @st.cache_data(ttl=3600)
 def get_price_history(tickers: List[str], start: datetime, end: datetime,
-                     use_cache: bool = True) -> pd.DataFrame:
+                     use_cache: bool = True, use_mock: bool = False) -> pd.DataFrame:
     """
     Obtém histórico de preços ajustados.
     
@@ -370,6 +536,7 @@ def get_price_history(tickers: List[str], start: datetime, end: datetime,
         start: Data inicial
         end: Data final
         use_cache: Se deve usar cache em disco
+        use_mock: Se True, usa dados simulados
     
     Returns:
         DataFrame com índice datetime e colunas = tickers (preços ajustados)
@@ -377,6 +544,12 @@ def get_price_history(tickers: List[str], start: datetime, end: datetime,
     if not tickers:
         logger.warning("Lista de tickers vazia")
         return pd.DataFrame()
+    
+    # Modo mock
+    if use_mock:
+        logger.info("Usando preços simulados")
+        st.info("🎲 Usando dados de preços simulados")
+        return generate_mock_price_data(tickers, start, end)
     
     cache_manager = DataCache()
     cache_key = cache_manager.get_cache_key(tickers, start, end, "prices")
@@ -391,67 +564,69 @@ def get_price_history(tickers: List[str], start: datetime, end: datetime,
     # Download de dados
     st.info(f"📥 Baixando histórico de preços para {len(tickers)} ativos...")
     
-    all_data = batch_download_history(tickers, start, end)
+    try:
+        all_data = batch_download_history(tickers, start, end, use_mock=False)
+        
+        if not all_data:
+            st.warning("⚠️ Falha no download. Usando dados simulados.")
+            return generate_mock_price_data(tickers, start, end)
+        
+        # Consolidar em DataFrame único (preços ajustados)
+        prices_dict = {}
+        
+        for ticker, data in all_data.items():
+            if not data.empty:
+                # Tentar Adj Close, senão Close
+                if 'Adj Close' in data.columns:
+                    prices_dict[ticker] = data['Adj Close']
+                elif 'Close' in data.columns:
+                    prices_dict[ticker] = data['Close']
+                    logger.warning(f"{ticker}: usando Close (Adj Close não disponível)")
+        
+        if not prices_dict:
+            st.warning("⚠️ Nenhum dado de preço disponível. Usando dados simulados.")
+            return generate_mock_price_data(tickers, start, end)
+        
+        prices_df = pd.DataFrame(prices_dict)
+        
+        # Limpar dados
+        prices_df = prices_df.dropna(how='all')
+        prices_df = prices_df.sort_index()
+        
+        # Salvar no cache
+        if use_cache and not prices_df.empty:
+            cache_manager.save_to_cache(cache_key, prices_df)
+        
+        st.success(f"✅ Histórico obtido: {len(prices_df)} dias, {len(prices_df.columns)} ativos")
+        
+        return prices_df
     
-    if not all_data:
-        st.error("❌ Nenhum dado disponível para os tickers selecionados")
-        return pd.DataFrame()
-    
-    # Consolidar em DataFrame único (preços ajustados)
-    prices_dict = {}
-    
-    for ticker, data in all_data.items():
-        if not data.empty:
-            # Tentar Adj Close, senão Close
-            if 'Adj Close' in data.columns:
-                prices_dict[ticker] = data['Adj Close']
-            elif 'Close' in data.columns:
-                prices_dict[ticker] = data['Close']
-                logger.warning(f"{ticker}: usando Close (Adj Close não disponível)")
-    
-    if not prices_dict:
-        st.warning("⚠️ Nenhum dado de preço disponível")
-        return pd.DataFrame()
-    
-    prices_df = pd.DataFrame(prices_dict)
-    
-    # Limpar dados
-    prices_df = prices_df.dropna(how='all')  # Remove dias sem nenhum dado
-    
-    # Ordenar por data
-    prices_df = prices_df.sort_index()
-    
-    # Salvar no cache
-    if use_cache and not prices_df.empty:
-        cache_manager.save_to_cache(cache_key, prices_df)
-    
-    st.success(f"✅ Histórico obtido: {len(prices_df)} dias, {len(prices_df.columns)} ativos")
-    
-    return prices_df
+    except Exception as e:
+        logger.error(f"Erro no download de preços: {e}")
+        st.warning(f"⚠️ Erro no download: {e}. Usando dados simulados.")
+        return generate_mock_price_data(tickers, start, end)
 
 
 @st.cache_data(ttl=3600)
 def get_volume_history(tickers: List[str], start: datetime, end: datetime,
-                      use_cache: bool = True) -> pd.DataFrame:
+                      use_cache: bool = True, use_mock: bool = False) -> pd.DataFrame:
     """
     Obtém histórico de volume negociado.
-    
-    Args:
-        tickers: Lista de tickers
-        start: Data inicial
-        end: Data final
-        use_cache: Se deve usar cache
-    
-    Returns:
-        DataFrame com índice datetime e colunas = tickers (volume)
     """
     if not tickers:
         return pd.DataFrame()
     
+    if use_mock:
+        # Gerar volumes simulados
+        dates = pd.date_range(start=start, end=end, freq='B')
+        volumes = {}
+        for ticker in tickers:
+            volumes[ticker] = np.random.randint(1e6, 100e6, len(dates))
+        return pd.DataFrame(volumes, index=dates)
+    
     cache_manager = DataCache()
     cache_key = cache_manager.get_cache_key(tickers, start, end, "volume")
     
-    # Tentar carregar do cache
     if use_cache:
         cached_data = cache_manager.load_from_cache(cache_key)
         if cached_data is not None:
@@ -474,7 +649,6 @@ def get_volume_history(tickers: List[str], start: datetime, end: datetime,
     volume_df = volume_df.dropna(how='all')
     volume_df = volume_df.sort_index()
     
-    # Salvar no cache
     if use_cache and not volume_df.empty:
         cache_manager.save_to_cache(cache_key, volume_df)
     
@@ -483,7 +657,7 @@ def get_volume_history(tickers: List[str], start: datetime, end: datetime,
 
 @st.cache_data(ttl=3600)
 def get_dividends(tickers: List[str], start: datetime, end: datetime,
-                 use_cache: bool = True) -> Dict[str, pd.Series]:
+                 use_cache: bool = True, use_mock: bool = False) -> Dict[str, pd.Series]:
     """
     Obtém histórico de dividendos pagos.
     
@@ -492,12 +666,19 @@ def get_dividends(tickers: List[str], start: datetime, end: datetime,
         start: Data inicial
         end: Data final
         use_cache: Se deve usar cache
+        use_mock: Se True, usa dados simulados
     
     Returns:
         Dicionário {ticker: Series de dividendos com índice datetime}
     """
     if not tickers:
         return {}
+    
+    # Modo mock
+    if use_mock:
+        logger.info("Usando dividendos simulados")
+        st.info("🎲 Usando dados de dividendos simulados")
+        return generate_mock_dividend_data(tickers, start, end)
     
     cache_manager = DataCache()
     cache_key = cache_manager.get_cache_key(tickers, start, end, "dividends")
@@ -507,76 +688,90 @@ def get_dividends(tickers: List[str], start: datetime, end: datetime,
         cached_data = cache_manager.load_from_cache(cache_key, max_age_hours=12)
         if cached_data is not None:
             st.success(f"✅ Dados de dividendos carregados do cache")
-            # Converter DataFrame de volta para dict de Series
             return {col: cached_data[col].dropna() for col in cached_data.columns}
     
     st.info(f"📥 Baixando histórico de dividendos para {len(tickers)} ativos...")
     
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
-    dividends_dict = {}
-    total = len(tickers)
-    success_count = 0
-    
-    for idx, ticker in enumerate(tickers):
-        status_text.text(f"Obtendo dividendos: {ticker} ({idx+1}/{total})")
+    try:
+        progress_bar = st.progress(0)
+        status_text = st.empty()
         
-        try:
-            ticker_obj = yf.Ticker(ticker)
-            divs = ticker_obj.dividends
+        dividends_dict = {}
+        total = len(tickers)
+        success_count = 0
+        
+        for idx, ticker in enumerate(tickers):
+            status_text.text(f"Obtendo dividendos: {ticker} ({idx+1}/{total})")
             
-            if not divs.empty:
-                # Filtrar por período
-                divs = divs[(divs.index >= start) & (divs.index <= end)]
+            try:
+                ticker_obj = yf.Ticker(ticker)
+                divs = ticker_obj.dividends
                 
                 if not divs.empty:
-                    dividends_dict[ticker] = divs
-                    success_count += 1
+                    # Filtrar por período
+                    divs = divs[(divs.index >= start) & (divs.index <= end)]
+                    
+                    if not divs.empty:
+                        dividends_dict[ticker] = divs
+                        success_count += 1
+            
+            except Exception as e:
+                logger.warning(f"Erro ao obter dividendos de {ticker}: {e}")
+                continue
+            
+            progress_bar.progress((idx + 1) / total)
         
-        except Exception as e:
-            logger.warning(f"Erro ao obter dividendos de {ticker}: {e}")
-            continue
+        progress_bar.empty()
+        status_text.empty()
         
-        progress_bar.progress((idx + 1) / total)
+        # Se falhou muito, usar mock
+        if success_count == 0 and total > 10:
+            st.warning("⚠️ Falha ao obter dividendos. Usando dados simulados.")
+            return generate_mock_dividend_data(tickers, start, end)
+        
+        # Consolidar em DataFrame para cache
+        if dividends_dict:
+            all_dates = pd.DatetimeIndex([])
+            for series in dividends_dict.values():
+                all_dates = all_dates.union(series.index)
+            
+            divs_df = pd.DataFrame(index=all_dates.sort_values())
+            for ticker, series in dividends_dict.items():
+                divs_df[ticker] = series
+            
+            if use_cache:
+                cache_manager.save_to_cache(cache_key, divs_df)
+            
+            st.success(f"✅ Dividendos obtidos: {success_count}/{total} ativos com pagamentos")
+        else:
+            st.warning("⚠️ Nenhum dividendo encontrado no período selecionado")
+        
+        return dividends_dict
     
-    progress_bar.empty()
-    status_text.empty()
-    
-    # Consolidar em DataFrame para cache
-    if dividends_dict:
-        # Criar DataFrame alinhado por data
-        all_dates = pd.DatetimeIndex([])
-        for series in dividends_dict.values():
-            all_dates = all_dates.union(series.index)
-        
-        divs_df = pd.DataFrame(index=all_dates.sort_values())
-        for ticker, series in dividends_dict.items():
-            divs_df[ticker] = series
-        
-        if use_cache:
-            cache_manager.save_to_cache(cache_key, divs_df)
-        
-        st.success(f"✅ Dividendos obtidos: {success_count}/{total} ativos com pagamentos")
-    else:
-        st.warning("⚠️ Nenhum dividendo encontrado no período selecionado")
-    
-    return dividends_dict
+    except Exception as e:
+        logger.error(f"Erro no download de dividendos: {e}")
+        st.warning(f"⚠️ Erro: {e}. Usando dados simulados.")
+        return generate_mock_dividend_data(tickers, start, end)
 
 
-@st.cache_data(ttl=1800)  # Cache de 30 minutos
-def get_current_prices(tickers: List[str]) -> Dict[str, float]:
+@st.cache_data(ttl=1800)
+def get_current_prices(tickers: List[str], use_mock: bool = False) -> Dict[str, float]:
     """
     Obtém preços atuais (último fechamento disponível).
     
     Args:
         tickers: Lista de tickers
+        use_mock: Se True, usa dados simulados
     
     Returns:
         Dicionário {ticker: preço}
     """
     if not tickers:
         return {}
+    
+    if use_mock:
+        # Preços simulados
+        return {ticker: np.random.uniform(10, 100) for ticker in tickers}
     
     prices = {}
     
@@ -590,7 +785,6 @@ def get_current_prices(tickers: List[str]) -> Dict[str, float]:
     
     for ticker, data in all_data.items():
         if not data.empty:
-            # Tentar Adj Close, senão Close
             if 'Adj Close' in data.columns:
                 last_price = data['Adj Close'].iloc[-1]
             elif 'Close' in data.columns:
@@ -600,6 +794,11 @@ def get_current_prices(tickers: List[str]) -> Dict[str, float]:
             
             if not np.isnan(last_price):
                 prices[ticker] = float(last_price)
+    
+    # Se falhou, usar mock
+    if not prices and use_mock is False:
+        st.warning("⚠️ Falha ao obter preços. Usando valores simulados.")
+        return {ticker: np.random.uniform(10, 100) for ticker in tickers}
     
     st.success(f"✅ Preços obtidos para {len(prices)} ativos")
     
@@ -611,14 +810,6 @@ def validate_data_quality(prices_df: pd.DataFrame,
                          max_missing_pct: float = 0.1) -> Tuple[pd.DataFrame, List[str], Dict[str, str]]:
     """
     Valida qualidade dos dados e remove ativos com dados insuficientes.
-    
-    Args:
-        prices_df: DataFrame de preços
-        min_data_points: Número mínimo de pontos de dados
-        max_missing_pct: Percentual máximo de dados faltantes permitido
-    
-    Returns:
-        Tuple (DataFrame limpo, lista de tickers removidos, dict de razões)
     """
     if prices_df.empty:
         return prices_df, [], {}
@@ -632,31 +823,26 @@ def validate_data_quality(prices_df: pd.DataFrame,
         valid_points = prices_df[col].notna().sum()
         missing_pct = 1 - (valid_points / total_days)
         
-        # Verificar número mínimo de pontos
         if valid_points < min_data_points:
             removed_tickers.append(col)
             removal_reasons[col] = f"Dados insuficientes: {valid_points} pontos (mín: {min_data_points})"
             logger.warning(f"Removido {col}: apenas {valid_points} pontos válidos")
             continue
         
-        # Verificar percentual de dados faltantes
         if missing_pct > max_missing_pct:
             removed_tickers.append(col)
-            removal_reasons[col] = f"Muitos dados faltantes: {missing_pct*100:.1f}% (máx: {max_missing_pct*100:.1f}%)"
+            removal_reasons[col] = f"Muitos dados faltantes: {missing_pct*100:.1f}%"
             logger.warning(f"Removido {col}: {missing_pct*100:.1f}% de dados faltantes")
             continue
     
-    # Remover colunas com dados insuficientes
     clean_df = prices_df.drop(columns=removed_tickers, errors='ignore')
     
     if clean_df.empty:
         st.error("❌ Todos os ativos foram removidos por dados insuficientes")
         return clean_df, removed_tickers, removal_reasons
     
-    # Forward fill para preencher gaps pequenos (máx 5 dias consecutivos)
+    # Forward fill para preencher gaps pequenos
     clean_df = clean_df.fillna(method='ffill', limit=5)
-    
-    # Remover linhas ainda com NaN (início da série)
     clean_df = clean_df.dropna(how='any')
     
     if removed_tickers:
@@ -673,18 +859,11 @@ def validate_data_quality(prices_df: pd.DataFrame,
 def get_ticker_info(ticker: str) -> Dict:
     """
     Obtém informações detalhadas de um ticker.
-    
-    Args:
-        ticker: Ticker do ativo
-    
-    Returns:
-        Dicionário com informações do ativo
     """
     try:
         ticker_obj = yf.Ticker(ticker)
         info = ticker_obj.info
         
-        # Extrair campos relevantes
         relevant_info = {
             'shortName': info.get('shortName', ticker),
             'longName': info.get('longName', ''),
@@ -709,63 +888,16 @@ def get_ticker_info(ticker: str) -> Dict:
         return {'shortName': ticker, 'error': str(e)}
 
 
-def get_multiple_ticker_info(tickers: List[str], show_progress: bool = True) -> pd.DataFrame:
-    """
-    Obtém informações de múltiplos tickers.
-    
-    Args:
-        tickers: Lista de tickers
-        show_progress: Se deve mostrar progresso
-    
-    Returns:
-        DataFrame com informações dos ativos
-    """
-    if not tickers:
-        return pd.DataFrame()
-    
-    if show_progress:
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-    
-    info_list = []
-    
-    for idx, ticker in enumerate(tickers):
-        if show_progress:
-            status_text.text(f"Obtendo informações: {ticker} ({idx+1}/{len(tickers)})")
-        
-        info = get_ticker_info(ticker)
-        info['ticker'] = ticker
-        info_list.append(info)
-        
-        if show_progress:
-            progress_bar.progress((idx + 1) / len(tickers))
-    
-    if show_progress:
-        progress_bar.empty()
-        status_text.empty()
-    
-    df = pd.DataFrame(info_list)
-    
-    return df
-
-
 def calculate_returns(prices_df: pd.DataFrame, method: str = 'simple') -> pd.DataFrame:
     """
     Calcula retornos diários.
-    
-    Args:
-        prices_df: DataFrame de preços
-        method: 'simple' ou 'log'
-    
-    Returns:
-        DataFrame de retornos
     """
     if prices_df.empty:
         return pd.DataFrame()
     
     if method == 'log':
         returns = np.log(prices_df / prices_df.shift(1))
-    else:  # simple
+    else:
         returns = prices_df.pct_change()
     
     returns = returns.dropna()
@@ -773,111 +905,6 @@ def calculate_returns(prices_df: pd.DataFrame, method: str = 'simple') -> pd.Dat
     return returns
 
 
-def resample_prices(prices_df: pd.DataFrame, frequency: str = 'W') -> pd.DataFrame:
-    """
-    Reamostra preços para frequência diferente.
-    
-    Args:
-        prices_df: DataFrame de preços diários
-        frequency: 'W' (semanal), 'M' (mensal), 'Q' (trimestral), 'Y' (anual)
-    
-    Returns:
-        DataFrame reamostrado
-    """
-    if prices_df.empty:
-        return pd.DataFrame()
-    
-    # Usar último preço do período
-    resampled = prices_df.resample(frequency).last()
-    resampled = resampled.dropna(how='all')
-    
-    return resampled
-
-
-def get_data_summary(prices_df: pd.DataFrame, dividends_dict: Dict[str, pd.Series]) -> pd.DataFrame:
-    """
-    Cria resumo estatístico dos dados coletados.
-    
-    Args:
-        prices_df: DataFrame de preços
-        dividends_dict: Dicionário de dividendos
-    
-    Returns:
-        DataFrame com resumo por ativo
-    """
-    if prices_df.empty:
-        return pd.DataFrame()
-    
-    summary_data = []
-    
-    for ticker in prices_df.columns:
-        prices = prices_df[ticker].dropna()
-        
-        summary = {
-            'ticker': ticker,
-            'data_points': len(prices),
-            'first_date': prices.index[0].strftime('%Y-%m-%d'),
-            'last_date': prices.index[-1].strftime('%Y-%m-%d'),
-            'first_price': prices.iloc[0],
-            'last_price': prices.iloc[-1],
-            'min_price': prices.min(),
-            'max_price': prices.max(),
-            'avg_price': prices.mean(),
-            'price_std': prices.std(),
-            'has_dividends': ticker in dividends_dict,
-            'num_dividends': len(dividends_dict.get(ticker, [])),
-        }
-        
-        summary_data.append(summary)
-    
-    summary_df = pd.DataFrame(summary_data)
-    
-    return summary_df
-
-
-# Funções auxiliares para debugging e manutenção
-
-def check_data_integrity(prices_df: pd.DataFrame) -> Dict[str, any]:
-    """
-    Verifica integridade dos dados.
-    
-    Returns:
-        Dicionário com estatísticas de integridade
-    """
-    if prices_df.empty:
-        return {'status': 'empty'}
-    
-    integrity = {
-        'total_tickers': len(prices_df.columns),
-        'total_days': len(prices_df),
-        'missing_values': prices_df.isna().sum().sum(),
-        'missing_pct': (prices_df.isna().sum().sum() / prices_df.size) * 100,
-        'tickers_with_missing': (prices_df.isna().any()).sum(),
-        'date_range': f"{prices_df.index[0].date()} to {prices_df.index[-1].date()}",
-        'duplicated_dates': prices_df.index.duplicated().sum(),
-    }
-    
-    return integrity
-
-
-def export_data_to_csv(prices_df: pd.DataFrame, filename: str = "prices_export.csv"):
-    """
-    Exporta dados para CSV.
-    
-    Args:
-        prices_df: DataFrame a exportar
-        filename: Nome do arquivo
-    """
-    try:
-        prices_df.to_csv(filename)
-        logger.info(f"Dados exportados para {filename}")
-        return True
-    except Exception as e:
-        logger.error(f"Erro ao exportar dados: {e}")
-        return False
-
-
-# Inicialização e verificação do módulo
 def verify_module():
     """Verifica se o módulo está configurado corretamente."""
     checks = {
