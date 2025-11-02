@@ -17,6 +17,7 @@ sys.path.insert(0, str(root_dir))
 
 from core import data
 from core.init import init_all
+from core.cache import salvar_dados_cache, carregar_dados_cache
 
 # Configuração da página
 st.set_page_config(
@@ -322,37 +323,50 @@ def exibir_composicao_portfolio(weights_dict, title):
 # ==========================================
 
 def carregar_dados():
-    """Carrega dados de preços para otimização"""
+    """Carrega dados de preços usando cache global"""
     
     tickers = st.session_state.portfolio_tickers
     
     if not tickers:
-        st.warning("⚠ Nenhum ativo no portfólio. Vá para 'Selecionar Ativos' primeiro.")
+        st.warning("⚠ Nenhum ativo no portfólio")
         return False
     
     if len(tickers) < 2:
-        st.warning("⚠ Selecione pelo menos 2 ativos para otimização.")
+        st.warning("⚠ Selecione pelo menos 2 ativos")
         return False
     
     start_date = st.session_state.period_start
     end_date = st.session_state.period_end
     
-    st.info(f"Carregando dados de {len(tickers)} ativos...")
+    # USAR CACHE
+    price_data, _ = carregar_dados_cache(tickers, start_date, end_date)
+    
+    if price_data is not None and not price_data.empty:
+        st.info("📦 Dados carregados do cache")
+        st.session_state.price_data = price_data
+        st.success(f"✓ {len(price_data)} dias, {len(price_data.columns)} ativos")
+        return True
+    
+    # Se não tem cache, baixar
+    st.info(f"📥 Baixando dados de {len(tickers)} ativos...")
     
     with st.spinner("Baixando preços históricos..."):
         try:
             price_data = data.get_price_history(tickers, start_date, end_date)
             
             if price_data.empty:
-                st.error("❌ Nenhum dado foi obtido")
+                st.error("❌ Nenhum dado obtido")
                 return False
             
-            # Remover colunas com muitos NaN
+            # Limpar dados
             price_data = price_data.dropna(axis=1, thresh=len(price_data) * 0.8)
             
             if price_data.empty:
                 st.error("❌ Dados insuficientes após limpeza")
                 return False
+            
+            # SALVAR NO CACHE
+            salvar_dados_cache(tickers, start_date, end_date, price_data, None)
             
             st.session_state.price_data = price_data
             st.success(f"✓ Dados carregados: {len(price_data)} dias, {len(price_data.columns)} ativos")
