@@ -1,816 +1,692 @@
 """
-Página 5: Resumo Executivo
-Recomendação final, quantidades de ações e relatórios
+📋 Resumo Executivo
+Recomendação final personalizada com plano de investimento detalhado
 """
 
 import streamlit as st
 import pandas as pd
 import numpy as np
+from datetime import datetime
+from scipy.optimize import minimize
 import sys
 from pathlib import Path
-from datetime import datetime
-import io
 
-# Adicionar diretório raiz ao path
-root_dir = Path(__file__).parent.parent.parent
+# Configurar path
+root_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(root_dir))
 
-from core import data, metrics, opt, ui
-import logging
-
-logger = logging.getLogger(__name__)
+from core.init import init_all
+from core.cache import carregar_dados_cache
 
 # Configuração da página
 st.set_page_config(
-    page_title="Resumo Executivo - Portfolio B3",
+    page_title="Resumo Executivo",
     page_icon="📋",
     layout="wide"
 )
 
-
-def initialize_session_state():
-    """Inicializa variáveis de sessão."""
-    if 'selected_tickers' not in st.session_state:
-        st.session_state.selected_tickers = []
-    
-    if 'specialized_portfolios' not in st.session_state:
-        st.session_state.specialized_portfolios = {}
-    
-    if 'optimized_portfolios' not in st.session_state:
-        st.session_state.optimized_portfolios = {}
-    
-    if 'recommended_portfolio' not in st.session_state:
-        st.session_state.recommended_portfolio = None
-    
-    if 'share_quantities' not in st.session_state:
-        st.session_state.share_quantities = {}
+# Inicializar
+init_all()
 
 
-def check_prerequisites():
-    """Verifica se há portfólios otimizados."""
-    if not st.session_state.selected_tickers:
-        ui.create_info_box(
-            "⚠️ Nenhum ativo selecionado. Por favor, complete o fluxo de análise primeiro.",
-            "warning"
-        )
-        return False
-    
-    all_portfolios = {
-        **st.session_state.specialized_portfolios,
-        **st.session_state.optimized_portfolios
-    }
-    
-    if not all_portfolios:
-        ui.create_info_box(
-            "⚠️ Nenhum portfólio otimizado disponível. Por favor, otimize pelo menos um portfólio nas páginas anteriores.",
-            "warning"
-        )
-        return False
-    
-    return True
+# ==========================================
+# FUNÇÕES DE OTIMIZAÇÃO
+# ==========================================
+
+def calcular_retornos(prices):
+    """Calcula retornos diários"""
+    return prices.pct_change().dropna()
 
 
-def get_user_profile():
-    """Interface para definir perfil do investidor."""
+def otimizar_portfolio(returns, objetivo='sharpe', rf_rate=0.1175, target_risk=None):
+    """
+    Otimiza portfólio baseado em objetivo
     
-    ui.create_section_header(
-        "👤 Perfil do Investidor",
-        "Defina seu perfil para receber recomendação personalizada",
-        "👤"
+    Args:
+        returns: DataFrame de retornos
+        objetivo: 'sharpe', 'minvol', 'target_return'
+        rf_rate: Taxa livre de risco
+        target_risk: Risco alvo (para target_return)
+        
+    Returns:
+        Dict com pesos e métricas
+    """
+    n_assets = len(returns.columns)
+    
+    def portfolio_return(weights):
+        return np.sum(returns.mean() * weights) * 252
+    
+    def portfolio_vol(weights):
+        cov = returns.cov() * 252
+        return np.sqrt(np.dot(weights.T, np.dot(cov, weights)))
+    
+    def sharpe_ratio(weights):
+        ret = portfolio_return(weights)
+        vol = portfolio_vol(weights)
+        return (ret - rf_rate) / vol
+    
+    # Configurar otimização baseada no objetivo
+    if objetivo == 'sharpe':
+        objective = lambda w: -sharpe_ratio(w)
+    elif objetivo == 'minvol':
+        objective = lambda w: portfolio_vol(w)
+    else:
+        objective = lambda w: -portfolio_return(w)
+    
+    constraints = [{'type': 'eq', 'fun': lambda w: np.sum(w) - 1}]
+    
+    if target_risk and objetivo == 'target_return':
+        constraints.append({'type': 'ineq', 'fun': lambda w: target_risk - portfolio_vol(w)})
+    
+    bounds = tuple((0, 1) for _ in range(n_assets))
+    initial = np.array([1/n_assets] * n_assets)
+    
+    result = minimize(
+        objective,
+        initial,
+        method='SLSQP',
+        bounds=bounds,
+        constraints=constraints,
+        options={'maxiter': 1000}
     )
     
-    col1, col2, col3 = st.columns(3)
+    if not result.success:
+        return None
     
-    with col1:
-        objective = st.selectbox(
-            "Objetivo Principal:",
-            ["Renda Mensal", "Crescimento de Capital", "Balanceado"],
-            help="Qual é sua prioridade ao investir?"
+    weights = result.x
+    
+    return {
+        'weights': dict(zip(returns.columns, weights)),
+        'return': portfolio_return(weights),
+        'volatility': portfolio_vol(weights),
+        'sharpe': sharpe_ratio(weights)
+    }
+
+
+# ==========================================
+# ANÁLISE E RECOMENDAÇÃO
+# ==========================================
+
+def analisar_perfil_investidor(valor_investimento):
+    """
+    Determina perfil do investidor baseado no valor
+    
+    Args:
+        valor_investimento: Valor a investir
+        
+    Returns:
+        String com perfil
+    """
+    if valor_investimento < 10000:
+        return 'conservador'
+    elif valor_investimento < 50000:
+        return 'moderado'
+    else:
+        return 'agressivo'
+
+
+def recomendar_portfolio(portfolios, perfil, metricas_dividendos=None):
+    """
+    Recomenda o melhor portfólio baseado em análise técnica e fundamental
+    
+    Args:
+        portfolios: Dict com portfólios otimizados
+        perfil: Perfil do investidor
+        metricas_dividendos: DataFrame com métricas de dividendos (opcional)
+        
+    Returns:
+        Dict com recomendação
+    """
+    # Scores para cada portfólio
+    scores = {}
+    
+    # Máximo Sharpe - Melhor relação risco/retorno
+    if 'sharpe_maximo' in portfolios:
+        p = portfolios['sharpe_maximo']
+        score = 0
+        
+        # Análise técnica
+        score += p['sharpe'] * 30  # Sharpe é muito importante
+        score += p['return'] * 20   # Retorno esperado
+        score -= p['volatility'] * 10  # Penalizar volatilidade
+        
+        # Ajuste por perfil
+        if perfil == 'agressivo':
+            score += 15  # Agressivos preferem retorno
+        elif perfil == 'moderado':
+            score += 25  # Moderados adoram Sharpe
+        
+        scores['sharpe_maximo'] = score
+    
+    # Mínima Volatilidade - Mais estável
+    if 'minima_volatilidade' in portfolios:
+        p = portfolios['minima_volatilidade']
+        score = 0
+        
+        # Análise técnica
+        score -= p['volatility'] * 40  # Volatilidade baixa é ótimo
+        score += p['return'] * 15
+        score += p['sharpe'] * 20
+        
+        # Ajuste por perfil
+        if perfil == 'conservador':
+            score += 30  # Conservadores preferem estabilidade
+        elif perfil == 'moderado':
+            score += 15
+        
+        scores['minima_volatilidade'] = score
+    
+    # Dividendos Regulares - Renda passiva
+    if 'dividendos_regulares' in portfolios and metricas_dividendos is not None:
+        p = portfolios['dividendos_regulares']
+        score = 0
+        
+        # Análise fundamental (dividendos)
+        dy_medio = metricas_dividendos['dy_anual'].mean()
+        regularidade_media = metricas_dividendos['regularidade'].mean()
+        
+        score += dy_medio * 2  # DY alto é bom
+        score += regularidade_media * 0.3  # Regularidade é importante
+        score += p['return'] * 10
+        
+        # Ajuste por perfil
+        if perfil == 'conservador':
+            score += 20  # Conservadores gostam de renda
+        elif perfil == 'moderado':
+            score += 10
+        
+        scores['dividendos_regulares'] = score
+    
+    # Selecionar melhor
+    if not scores:
+        return None
+    
+    melhor = max(scores.items(), key=lambda x: x[1])
+    
+    # Explicação da escolha
+    explicacoes = {
+        'sharpe_maximo': {
+            'titulo': '🎯 Portfólio de Máximo Sharpe Ratio',
+            'descricao': 'Melhor relação risco-retorno disponível',
+            'indicado': 'Investidores que buscam eficiência e crescimento balanceado',
+            'vantagens': [
+                'Otimiza retorno ajustado ao risco',
+                'Equilíbrio entre ganhos e volatilidade',
+                'Estratégia comprovada pela teoria moderna'
+            ]
+        },
+        'minima_volatilidade': {
+            'titulo': '🛡️ Portfólio de Mínima Volatilidade',
+            'descricao': 'Máxima estabilidade e menor risco possível',
+            'indicado': 'Investidores conservadores que priorizam preservação de capital',
+            'vantagens': [
+                'Menor oscilação de preços',
+                'Ideal para perfil conservador',
+                'Proteção em momentos de crise'
+            ]
+        },
+        'dividendos_regulares': {
+            'titulo': '💰 Portfólio de Dividendos Regulares',
+            'descricao': 'Foco em renda passiva mensal consistente',
+            'indicado': 'Investidores que buscam fluxo de caixa regular',
+            'vantagens': [
+                'Renda mensal previsível',
+                'Bons pagadores de dividendos',
+                'Estratégia de longo prazo'
+            ]
+        }
+    }
+    
+    return {
+        'portfolio': melhor[0],
+        'score': melhor[1],
+        'dados': portfolios[melhor[0]],
+        'info': explicacoes[melhor[0]]
+    }
+
+
+def calcular_quantidades(weights, valor_investimento, precos_atuais):
+    """
+    Calcula quantidades a comprar de cada ativo
+    
+    Args:
+        weights: Dict com pesos
+        valor_investimento: Valor total
+        precos_atuais: Dict com preços
+        
+    Returns:
+        DataFrame com quantidades
+    """
+    alocacoes = []
+    
+    for ticker, peso in weights.items():
+        if peso < 0.01:  # Ignorar < 1%
+            continue
+        
+        valor_alocar = valor_investimento * peso
+        preco = precos_atuais.get(ticker, 0)
+        
+        if preco > 0:
+            quantidade = int(valor_alocar / preco)
+            valor_real = quantidade * preco
+            
+            alocacoes.append({
+                'Ativo': ticker,
+                'Peso': peso,
+                'Valor Alvo': valor_alocar,
+                'Preço': preco,
+                'Quantidade': quantidade,
+                'Valor Real': valor_real
+            })
+    
+    df = pd.DataFrame(alocacoes)
+    
+    if not df.empty:
+        df = df.sort_values('Valor Real', ascending=False)
+    
+    return df
+
+
+# ==========================================
+# FUNÇÃO PRINCIPAL
+# ==========================================
+
+def main():
+    """Função principal"""
+    
+    st.title("📋 Resumo Executivo")
+    st.markdown("Recomendação final personalizada com plano de investimento detalhado")
+    st.markdown("---")
+    
+    # Verificar se há portfólio
+    if not st.session_state.portfolio_tickers:
+        st.warning("⚠️ Nenhum ativo no portfólio")
+        st.info("👉 Vá para **Selecionar Ativos** primeiro")
+        st.stop()
+    
+    if len(st.session_state.portfolio_tickers) < 2:
+        st.warning("⚠️ Selecione pelo menos 2 ativos para otimização")
+        st.stop()
+    
+    # Sidebar
+    with st.sidebar:
+        st.header("⚙️ Configurações")
+        
+        st.subheader("💰 Investimento")
+        
+        valor_investimento = st.number_input(
+            "Valor a Investir (R$)",
+            min_value=1000.0,
+            max_value=10000000.0,
+            value=10000.0,
+            step=1000.0,
+            help="Quanto você pretende investir"
+        )
+        
+        st.markdown("---")
+        
+        st.subheader("📊 Objetivo")
+        
+        objetivo_usuario = st.radio(
+            "Prioridade",
+            [
+                "Deixar o sistema decidir",
+                "Máximo retorno ajustado ao risco",
+                "Mínima volatilidade",
+                "Renda mensal de dividendos"
+            ]
+        )
+        
+        st.markdown("---")
+        
+        rf_rate = st.number_input(
+            "Taxa Livre de Risco",
+            min_value=0.0,
+            max_value=1.0,
+            value=st.session_state.risk_free_rate,
+            step=0.0001,
+            format="%.4f"
+        )
+        
+        st.markdown("---")
+        
+        btn_gerar = st.button(
+            "📊 Gerar Recomendação",
+            type="primary",
+            use_container_width=True
         )
     
-    with col2:
-        risk_tolerance = st.select_slider(
-            "Tolerância a Risco:",
-            options=["Muito Baixa", "Baixa", "Moderada", "Alta", "Muito Alta"],
-            value="Moderada",
-            help="Quanto risco você está disposto a assumir?"
-        )
+    # Info
+    st.info(f"📊 **{len(st.session_state.portfolio_tickers)} ativos** no portfólio")
     
-    with col3:
-        time_horizon = st.selectbox(
-            "Horizonte de Investimento:",
-            ["Curto Prazo (< 2 anos)", "Médio Prazo (2-5 anos)", "Longo Prazo (> 5 anos)"],
-            help="Por quanto tempo pretende manter o investimento?"
-        )
+    with st.expander("📋 Ver lista"):
+        cols = st.columns(5)
+        for idx, ticker in enumerate(st.session_state.portfolio_tickers):
+            with cols[idx % 5]:
+                st.write(f"• {ticker}")
     
-    # Preferências adicionais
-    with st.expander("⚙️ Preferências Adicionais", expanded=False):
+    st.markdown("---")
+    
+    # Gerar recomendação
+    if btn_gerar:
+        
+        # Carregar dados
+        tickers = st.session_state.portfolio_tickers
+        start_date = st.session_state.period_start
+        end_date = st.session_state.period_end
+        
+        price_data, dividend_data = carregar_dados_cache(tickers, start_date, end_date)
+        
+        if price_data is None or price_data.empty:
+            st.error("❌ Nenhum portfólio otimizado disponível")
+            st.warning("Por favor, otimize pelo menos um portfólio nas páginas anteriores:")
+            st.info("• **Portfólios Eficientes** - para Sharpe Máximo")
+            st.info("• **Sharpe e MinVol** - para comparação detalhada")
+            st.stop()
+        
+        # Limpar dados
+        price_data = price_data.dropna(axis=1, thresh=len(price_data) * 0.8)
+        
+        if price_data.empty or len(price_data.columns) < 2:
+            st.error("❌ Dados insuficientes")
+            st.stop()
+        
+        st.success("✓ Dados carregados")
+        
+        # Calcular retornos
+        returns = calcular_retornos(price_data)
+        
+        # Otimizar portfólios
+        with st.spinner("🧮 Otimizando portfólios..."):
+            
+            portfolios = {}
+            
+            # Sharpe Máximo
+            p_sharpe = otimizar_portfolio(returns, 'sharpe', rf_rate)
+            if p_sharpe:
+                portfolios['sharpe_maximo'] = p_sharpe
+            
+            # Mínima Volatilidade
+            p_minvol = otimizar_portfolio(returns, 'minvol', rf_rate)
+            if p_minvol:
+                portfolios['minima_volatilidade'] = p_minvol
+        
+        if not portfolios:
+            st.error("❌ Falha na otimização")
+            st.stop()
+        
+        # Determinar perfil
+        perfil = analisar_perfil_investidor(valor_investimento)
+        
+        # Carregar métricas de dividendos se disponível
+        metricas_dividendos = st.session_state.get('metricas_dividendos', None)
+        
+        # Recomendar
+        with st.spinner("🎯 Analisando e gerando recomendação..."):
+            recomendacao = recomendar_portfolio(portfolios, perfil, metricas_dividendos)
+        
+        if not recomendacao:
+            st.error("❌ Não foi possível gerar recomendação")
+            st.stop()
+        
+        # ==========================================
+        # EXIBIR RECOMENDAÇÃO
+        # ==========================================
+        
+        st.success("✅ Análise concluída!")
+        
+        st.markdown("---")
+        
+        # Header da recomendação
+        st.header("🎯 Recomendação Final")
+        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            st.markdown(f"## {recomendacao['info']['titulo']}")
+            st.markdown(f"**{recomendacao['info']['descricao']}**")
+            st.markdown(f"*{recomendacao['info']['indicado']}*")
+        
+        with col2:
+            st.metric("Perfil Identificado", perfil.title())
+            st.metric("Score de Adequação", f"{recomendacao['score']:.1f}")
+        
+        st.markdown("---")
+        
+        # Métricas do portfólio recomendado
+        st.subheader("📊 Métricas do Portfólio Recomendado")
+        
+        portfolio = recomendacao['dados']
+        
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric(
+                "Retorno Esperado (anual)",
+                f"{portfolio['return']:.2%}",
+                help="Retorno anualizado esperado"
+            )
+        
+        with col2:
+            st.metric(
+                "Volatilidade (anual)",
+                f"{portfolio['volatility']:.2%}",
+                help="Risco anualizado"
+            )
+        
+        with col3:
+            st.metric(
+                "Sharpe Ratio",
+                f"{portfolio['sharpe']:.3f}",
+                help="Retorno ajustado ao risco"
+            )
+        
+        with col4:
+            # Projeção de ganho
+            ganho_esperado = valor_investimento * portfolio['return']
+            st.metric(
+                "Ganho Esperado (1 ano)",
+                f"R$ {ganho_esperado:,.2f}",
+                help="Projeção baseada no retorno esperado"
+            )
+        
+        st.markdown("---")
+        
+        # Vantagens
+        st.subheader("✨ Por que esta recomendação?")
+        
+        for vantagem in recomendacao['info']['vantagens']:
+            st.markdown(f"✅ {vantagem}")
+        
+        st.markdown("---")
+        
+        # Alocação
+        st.subheader("💼 Alocação Recomendada")
+        
+        # Obter preços atuais
+        precos_atuais = {}
+        for ticker in portfolio['weights'].keys():
+            if ticker in price_data.columns:
+                precos_atuais[ticker] = price_data[ticker].iloc[-1]
+        
+        # Calcular quantidades
+        df_alocacao = calcular_quantidades(
+            portfolio['weights'],
+            valor_investimento,
+            precos_atuais
+        )
+        
+        if not df_alocacao.empty:
+            
+            # Resumo
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric("Valor Total Alocado", f"R$ {df_alocacao['Valor Real'].sum():,.2f}")
+            
+            with col2:
+                diferenca = valor_investimento - df_alocacao['Valor Real'].sum()
+                st.metric("Diferença (sobra)", f"R$ {diferenca:,.2f}")
+            
+            with col3:
+                st.metric("Número de Ativos", len(df_alocacao))
+            
+            st.markdown("---")
+            
+            # Tabela detalhada
+            st.dataframe(
+                df_alocacao.style.format({
+                    'Peso': '{:.2%}',
+                    'Valor Alvo': 'R$ {:.2f}',
+                    'Preço': 'R$ {:.2f}',
+                    'Quantidade': '{:.0f}',
+                    'Valor Real': 'R$ {:.2f}'
+                }),
+                use_container_width=True,
+                hide_index=True
+            )
+            
+            st.markdown("---")
+            
+            # Gráfico de alocação
+            import plotly.graph_objects as go
+            
+            fig = go.Figure(data=[go.Pie(
+                labels=df_alocacao['Ativo'],
+                values=df_alocacao['Valor Real'],
+                hole=0.3,
+                textinfo='label+percent',
+                hovertemplate='%{label}<br>R$ %{value:,.2f}<br>%{percent}<extra></extra>'
+            )])
+            
+            fig.update_layout(
+                title='Distribuição do Investimento',
+                height=500
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+        
+        else:
+            st.warning("⚠️ Não foi possível calcular quantidades")
+        
+        st.markdown("---")
+        
+        # Próximos passos
+        st.subheader("📝 Próximos Passos")
+        
+        st.markdown("""
+        **1. Revise a alocação**
+        - Verifique se os ativos e quantidades fazem sentido para você
+        - Considere ajustar baseado em suas convicções pessoais
+        
+        **2. Abra ordens na sua corretora**
+        - Use as quantidades exatas da tabela acima
+        - Considere fazer ordens limitadas para melhores preços
+        
+        **3. Acompanhamento**
+        - Monitore mensalmente a performance
+        - Rebalanceie quando necessário (sugestão: trimestral)
+        - Mantenha disciplina na estratégia
+        
+        **4. Documentação**
+        - Exporte esta recomendação (botão abaixo)
+        - Guarde para referência futura
+        """)
+        
+        st.markdown("---")
+        
+        # Export
         col1, col2 = st.columns(2)
         
         with col1:
-            prefer_dividends = st.checkbox(
-                "Priorizar dividendos regulares",
-                value=(objective == "Renda Mensal"),
-                help="Dar preferência a ativos com histórico de dividendos consistentes"
+            # CSV
+            csv = df_alocacao.to_csv(index=False)
+            st.download_button(
+                "📥 Baixar Alocação (CSV)",
+                data=csv,
+                file_name=f"alocacao_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                mime="text/csv",
+                use_container_width=True
             )
         
         with col2:
-            prefer_liquidity = st.checkbox(
-                "Priorizar liquidez",
-                value=True,
-                help="Preferir ativos mais líquidos (fáceis de comprar/vender)"
-            )
-    
-    profile = {
-        'objective': objective,
-        'risk_tolerance': risk_tolerance,
-        'time_horizon': time_horizon,
-        'prefer_dividends': prefer_dividends,
-        'prefer_liquidity': prefer_liquidity
-    }
-    
-    return profile
-
-
-def recommend_portfolio(user_profile: dict):
-    """Recomenda portfólio baseado no perfil do usuário."""
-    
-    all_portfolios = {
-        **st.session_state.specialized_portfolios,
-        **st.session_state.optimized_portfolios
-    }
-    
-    if not all_portfolios:
-        return None
-    
-    # Sistema de pontuação
-    scores = {}
-    
-    for name, portfolio in all_portfolios.items():
-        stats = portfolio['stats']
-        score = 0
-        
-        # Pontuação por objetivo
-        if user_profile['objective'] == 'Renda Mensal':
-            # Priorizar dividend yield e regularidade
-            if 'annual_yield' in stats:
-                score += stats['annual_yield'] * 500  # Peso alto para yield
-            
-            # Penalizar alta volatilidade
-            score -= stats['volatility'] * 100
-            
-            # Bonus para portfólio de dividendos
-            if 'Dividendos' in name:
-                score += 50
-        
-        elif user_profile['objective'] == 'Crescimento de Capital':
-            # Priorizar retorno esperado
-            score += stats['expected_return'] * 200
-            
-            # Sharpe também é importante
-            score += stats['sharpe_ratio'] * 30
-            
-            # Bonus para Máximo Sharpe
-            if 'Sharpe' in name:
-                score += 30
-        
-        else:  # Balanceado
-            # Priorizar Sharpe
-            score += stats['sharpe_ratio'] * 50
-            
-            # Retorno moderado
-            score += stats['expected_return'] * 100
-            
-            # Penalizar extremos de volatilidade
-            if stats['volatility'] < 0.15:  # Muito conservador
-                score -= 20
-            elif stats['volatility'] > 0.30:  # Muito agressivo
-                score -= 30
-        
-        # Ajuste por tolerância a risco
-        risk_multipliers = {
-            'Muito Baixa': {'volatility': -200, 'return': 50},
-            'Baixa': {'volatility': -100, 'return': 75},
-            'Moderada': {'volatility': -50, 'return': 100},
-            'Alta': {'volatility': 0, 'return': 150},
-            'Muito Alta': {'volatility': 50, 'return': 200}
-        }
-        
-        multiplier = risk_multipliers[user_profile['risk_tolerance']]
-        score += stats['volatility'] * multiplier['volatility']
-        score += stats['expected_return'] * multiplier['return']
-        
-        # Ajuste por horizonte
-        if user_profile['time_horizon'] == 'Curto Prazo (< 2 anos)':
-            # Penalizar alta volatilidade
-            score -= stats['volatility'] * 50
-        elif user_profile['time_horizon'] == 'Longo Prazo (> 5 anos)':
-            # Recompensar retorno de longo prazo
-            score += stats['expected_return'] * 50
-        
-        # Preferências adicionais
-        if user_profile.get('prefer_dividends') and 'annual_yield' in stats:
-            score += stats['annual_yield'] * 200
-        
-        scores[name] = score
-    
-    # Retornar portfólio com maior score
-    recommended = max(scores, key=scores.get)
-    
-    return recommended, scores
-
-
-def calculate_share_quantities(weights: dict, total_investment: float):
-    """Calcula quantidades de ações respeitando lotes."""
-    
-    # Obter preços atuais
-    tickers = list(weights.keys())
-    current_prices = data.get_current_prices(tickers)
-    
-    if not current_prices:
-        st.error("❌ Não foi possível obter preços atuais")
-        return {}, {}, 0
-    
-    quantities = {}
-    allocated = 0
-    lot_size = 100  # Lote padrão B3
-    
-    # Primeira passagem: calcular quantidades ideais
-    for ticker, weight in weights.items():
-        if ticker not in current_prices:
-            continue
-        
-        target_value = total_investment * weight
-        price = current_prices[ticker]
-        
-        # Quantidade ideal
-        ideal_qty = target_value / price
-        
-        # Arredondar para lote
-        lot_qty = round(ideal_qty / lot_size) * lot_size
-        
-        # Mínimo 1 lote
-        lot_qty = max(lot_size, lot_qty)
-        
-        quantities[ticker] = int(lot_qty)
-        allocated += quantities[ticker] * price
-    
-    # Segunda passagem: ajustar se exceder orçamento
-    while allocated > total_investment * 1.05:  # Tolerância de 5%
-        # Remover 1 lote do ativo com menor peso
-        sorted_by_weight = sorted(weights.items(), key=lambda x: x[1])
-        
-        for ticker, _ in sorted_by_weight:
-            if ticker in quantities and quantities[ticker] > lot_size:
-                quantities[ticker] -= lot_size
-                allocated -= lot_size * current_prices[ticker]
-                break
-    
-    # Calcular pesos efetivos
-    effective_weights = {}
-    for ticker, qty in quantities.items():
-        if ticker in current_prices:
-            effective_weights[ticker] = (qty * current_prices[ticker]) / allocated
-    
-    return quantities, effective_weights, allocated
-
-
-def show_recommendation():
-    """Exibe recomendação de portfólio."""
-    
-    ui.create_section_header(
-        "🎯 Recomendação Personalizada",
-        "Portfólio ideal para seu perfil",
-        "🎯"
-    )
-    
-    # Obter perfil
-    user_profile = get_user_profile()
-    
-    if st.button("🔮 Gerar Recomendação", type="primary", use_container_width=True):
-        
-        with st.spinner("Analisando seu perfil e gerando recomendação..."):
-            
-            recommended, scores = recommend_portfolio(user_profile)
-            
-            if not recommended:
-                st.error("❌ Não foi possível gerar recomendação")
-                return
-            
-            st.session_state.recommended_portfolio = recommended
-            
-            st.success(f"✅ Recomendação gerada: **{recommended}**")
-            
-            # Explicação da recomendação
-            ui.create_info_box(
-                f"Com base no seu perfil, o portfólio **{recommended}** é o mais adequado para seus objetivos.",
-                "success"
-            )
-            
-            # Detalhes da pontuação
-            with st.expander("📊 Como chegamos a esta recomendação?", expanded=False):
-                st.markdown("### Pontuação dos Portfólios")
-                
-                scores_df = pd.DataFrame({
-                    'Portfólio': list(scores.keys()),
-                    'Pontuação': list(scores.values())
-                })
-                scores_df = scores_df.sort_values('Pontuação', ascending=False)
-                scores_df['Pontuação'] = scores_df['Pontuação'].apply(lambda x: f"{x:.1f}")
-                
-                st.dataframe(scores_df, use_container_width=True)
-                
-                st.markdown("""
-                **Critérios considerados:**
-                - Objetivo de investimento (peso alto)
-                - Tolerância a risco (ajuste de volatilidade)
-                - Horizonte de tempo
-                - Preferências adicionais
-                """)
-            
-            st.rerun()
-
-
-def show_portfolio_details():
-    """Exibe detalhes do portfólio recomendado."""
-    
-    if not st.session_state.recommended_portfolio:
-        ui.create_info_box(
-            "Gere uma recomendação usando o botão acima para ver os detalhes.",
-            "info"
-        )
-        return
-    
-    recommended = st.session_state.recommended_portfolio
-    
-    # Buscar portfólio
-    all_portfolios = {
-        **st.session_state.specialized_portfolios,
-        **st.session_state.optimized_portfolios
-    }
-    
-    if recommended not in all_portfolios:
-        st.error("❌ Portfólio recomendado não encontrado")
-        return
-    
-    portfolio = all_portfolios[recommended]
-    weights = portfolio['weights']
-    stats = portfolio['stats']
-    
-    ui.create_section_header(
-        f"📊 Detalhes: {recommended}",
-        "Características do portfólio recomendado",
-        "📊"
-    )
-    
-    # Métricas principais
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        ui.create_metric_card(
-            "Retorno Esperado",
-            f"{stats['expected_return']*100:.2f}%",
-            help_text="Anualizado",
-            icon="📈"
-        )
-    
-    with col2:
-        ui.create_metric_card(
-            "Volatilidade",
-            f"{stats['volatility']*100:.2f}%",
-            help_text="Risco anualizado",
-            icon="📊"
-        )
-    
-    with col3:
-        ui.create_metric_card(
-            "Sharpe Ratio",
-            f"{stats['sharpe_ratio']:.3f}",
-            help_text="Retorno por unidade de risco",
-            icon="⭐"
-        )
-    
-    with col4:
-        ui.create_metric_card(
-            "Nº de Ativos",
-            f"{stats['num_assets']}",
-            help_text="Diversificação",
-            icon="🎯"
-        )
-    
-    # Métricas adicionais se disponível
-    if 'annual_yield' in stats:
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            ui.create_metric_card(
-                "Dividend Yield",
-                f"{stats['annual_yield']*100:.2f}%",
-                help_text="Anual estimado",
-                icon="💰"
-            )
-        
-        with col2:
-            if 'monthly_yield' in stats:
-                ui.create_metric_card(
-                    "Yield Mensal",
-                    f"{stats['monthly_yield']*100:.2f}%",
-                    help_text="Média mensal",
-                    icon="📅"
-                )
-        
-        with col3:
-            if 'dividend_volatility' in stats:
-                ui.create_metric_card(
-                    "Regularidade Divs",
-                    f"{1/stats['dividend_volatility']:.1f}" if stats['dividend_volatility'] > 0 else "N/A",
-                    help_text="Quanto maior, mais regular",
-                    icon="📊"
-                )
-    
-    # Alocação
-    st.markdown("### 📊 Composição do Portfólio")
-    
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
-        fig = ui.plot_portfolio_weights(weights, f"Alocação - {recommended}")
-        st.plotly_chart(fig, use_container_width=True)
-    
-    with col2:
-        weights_df = pd.DataFrame({
-            'Ticker': list(weights.keys()),
-            'Peso (%)': [w * 100 for w in weights.values()]
-        })
-        weights_df = weights_df.sort_values('Peso (%)', ascending=False)
-        
-        st.dataframe(weights_df, use_container_width=True, height=400)
-
-
-def calculate_investment_plan():
-    """Calcula plano de investimento com quantidades."""
-    
-    if not st.session_state.recommended_portfolio:
-        return
-    
-    ui.create_section_header(
-        "💵 Plano de Investimento",
-        "Quantidades exatas de ações a comprar",
-        "💵"
-    )
-    
-    recommended = st.session_state.recommended_portfolio
-    
-    all_portfolios = {
-        **st.session_state.specialized_portfolios,
-        **st.session_state.optimized_portfolios
-    }
-    
-    portfolio = all_portfolios[recommended]
-    weights = portfolio['weights']
-    
-    # Valor a investir
-    investment_amount = st.number_input(
-        "Valor a investir (R$):",
-        min_value=1000.0,
-        max_value=10000000.0,
-        value=st.session_state.investment_amount,
-        step=1000.0,
-        help="Valor total que deseja investir"
-    )
-    
-    if st.button("🧮 Calcular Quantidades", type="primary", use_container_width=True):
-        
-        with st.spinner("Calculando quantidades e preços..."):
-            
-            quantities, effective_weights, total_allocated = calculate_share_quantities(
-                weights,
-                investment_amount
-            )
-            
-            if not quantities:
-                st.error("❌ Erro ao calcular quantidades")
-                return
-            
-            st.session_state.share_quantities = quantities
-            
-            # Obter preços atuais
-            current_prices = data.get_current_prices(list(weights.keys()))
-            
-            # Criar DataFrame detalhado
-            plan_data = []
-            
-            for ticker in quantities.keys():
-                qty = quantities[ticker]
-                price = current_prices.get(ticker, 0)
-                target_weight = weights.get(ticker, 0)
-                effective_weight = effective_weights.get(ticker, 0)
-                total_value = qty * price
-                
-                plan_data.append({
-                    'Ticker': ticker,
-                    'Quantidade': qty,
-                    'Preço Atual (R$)': price,
-                    'Valor Total (R$)': total_value,
-                    'Peso Alvo (%)': target_weight * 100,
-                    'Peso Efetivo (%)': effective_weight * 100,
-                    'Diferença (%)': (effective_weight - target_weight) * 100
-                })
-            
-            plan_df = pd.DataFrame(plan_data)
-            plan_df = plan_df.sort_values('Valor Total (R$)', ascending=False)
-            
-            # Exibir resumo
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                ui.create_metric_card(
-                    "Valor Planejado",
-                    f"R$ {investment_amount:,.2f}",
-                    icon="💰"
-                )
-            
-            with col2:
-                ui.create_metric_card(
-                    "Valor Alocado",
-                    f"R$ {total_allocated:,.2f}",
-                    icon="✅"
-                )
-            
-            with col3:
-                diff = total_allocated - investment_amount
-                diff_pct = (diff / investment_amount) * 100 if investment_amount > 0 else 0
-                
-                ui.create_metric_card(
-                    "Diferença",
-                    f"R$ {diff:,.2f}",
-                    delta=f"{diff_pct:+.2f}%",
-                    icon="📊"
-                )
-            
-            with col4:
-                ui.create_metric_card(
-                    "Nº de Ativos",
-                    f"{len(quantities)}",
-                    icon="🎯"
-                )
-            
-            # Tabela detalhada
-            st.markdown("### 📋 Plano Detalhado de Compra")
-            
-            # Formatar para exibição
-            display_df = plan_df.copy()
-            display_df['Preço Atual (R$)'] = display_df['Preço Atual (R$)'].apply(lambda x: f"R$ {x:.2f}")
-            display_df['Valor Total (R$)'] = display_df['Valor Total (R$)'].apply(lambda x: f"R$ {x:,.2f}")
-            display_df['Peso Alvo (%)'] = display_df['Peso Alvo (%)'].apply(lambda x: f"{x:.2f}%")
-            display_df['Peso Efetivo (%)'] = display_df['Peso Efetivo (%)'].apply(lambda x: f"{x:.2f}%")
-            display_df['Diferença (%)'] = display_df['Diferença (%)'].apply(lambda x: f"{x:+.2f}%")
-            
-            st.dataframe(display_df, use_container_width=True, height=400)
-            
-            # Avisos
-            if abs(diff_pct) > 10:
-                ui.create_info_box(
-                    f"⚠️ A diferença entre o valor planejado e alocado é de {abs(diff_pct):.1f}%. "
-                    "Isso ocorre devido ao arredondamento para lotes de 100 ações. "
-                    "Considere ajustar o valor de investimento.",
-                    "warning"
-                )
-            
-            # Download
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                ui.create_download_button(
-                    plan_df,
-                    f"plano_investimento_{recommended.replace(' ', '_')}.csv",
-                    "📥 Download Plano (CSV)",
-                    "csv"
-                )
-            
-            with col2:
-                # Criar texto formatado para ordem de compra
-                order_text = f"PLANO DE INVESTIMENTO - {recommended}\n"
-                order_text += f"Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}\n"
-                order_text += f"Valor Total: R$ {total_allocated:,.2f}\n\n"
-                order_text += "ORDENS DE COMPRA:\n"
-                order_text += "-" * 50 + "\n"
-                
-                for _, row in plan_df.iterrows():
-                    order_text += f"\n{row['Ticker']}\n"
-                    order_text += f"  Quantidade: {row['Quantidade']} ações\n"
-                    order_text += f"  Preço ref.: R$ {row['Preço Atual (R$)']}\n"
-                    order_text += f"  Valor total: R$ {row['Valor Total (R$)']}\n"
-                
-                ui.create_download_button(
-                    order_text,
-                    f"ordens_compra_{recommended.replace(' ', '_')}.txt",
-                    "📥 Download Ordens (TXT)",
-                    "txt"
-                )
-
-
-def generate_executive_report():
-    """Gera relatório executivo completo."""
-    
-    if not st.session_state.recommended_portfolio:
-        return
-    
-    ui.create_section_header(
-        "📄 Relatório Executivo",
-        "Documento completo para download",
-        "📄"
-    )
-    
-    st.markdown("""
-    O relatório executivo inclui:
-    - Resumo do perfil do investidor
-    - Portfólio recomendado e justificativa
-    - Métricas detalhadas de risco e retorno
-    - Plano de investimento com quantidades
-    - Projeções de dividendos (se aplicável)
-    - Avisos e disclaimers
-    """)
-    
-    if st.button("📄 Gerar Relatório Completo", use_container_width=True):
-        
-        with st.spinner("Gerando relatório..."):
-            
-            # Criar relatório em texto
-            report = generate_text_report()
-            
-            # Exibir preview
-            with st.expander("👁️ Preview do Relatório", expanded=True):
-                st.text(report)
-            
-            # Download
-            ui.create_download_button(
-                report,
-                f"relatorio_executivo_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
-                "📥 Download Relatório",
-                "txt"
-            )
-
-
-def generate_text_report():
-    """Gera relatório em formato texto."""
-    
-    recommended = st.session_state.recommended_portfolio
-    
-    all_portfolios = {
-        **st.session_state.specialized_portfolios,
-        **st.session_state.optimized_portfolios
-    }
-    
-    portfolio = all_portfolios[recommended]
-    weights = portfolio['weights']
-    stats = portfolio['stats']
-    
-    report = f"""
-{'='*80}
-RELATÓRIO EXECUTIVO - ANÁLISE DE PORTFÓLIO B3
-{'='*80}
-
+            # Texto resumo
+            resumo_texto = f"""
+RESUMO EXECUTIVO - PORTFOLIO B3
 Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}
-Período de Análise: {st.session_state.period_start.strftime('%d/%m/%Y')} a {st.session_state.period_end.strftime('%d/%m/%Y')}
-Taxa Livre de Risco: {st.session_state.risk_free_rate*100:.2f}% a.a.
 
-{'='*80}
-1. PORTFÓLIO RECOMENDADO
-{'='*80}
+RECOMENDAÇÃO: {recomendacao['info']['titulo']}
+Perfil: {perfil.title()}
+Valor Investido: R$ {valor_investimento:,.2f}
 
-Estratégia: {recommended}
+MÉTRICAS:
+- Retorno Esperado: {portfolio['return']:.2%} a.a.
+- Volatilidade: {portfolio['volatility']:.2%} a.a.
+- Sharpe Ratio: {portfolio['sharpe']:.3f}
 
-MÉTRICAS DE DESEMPENHO:
-- Retorno Esperado (anualizado): {stats['expected_return']*100:.2f}%
-- Volatilidade (anualizada): {stats['volatility']*100:.2f}%
-- Índice de Sharpe: {stats['sharpe_ratio']:.3f}
-- Número de Ativos: {stats['num_assets']}
-- Peso Máximo Individual: {stats['max_weight']*100:.2f}%
+ALOCAÇÃO:
+{df_alocacao.to_string(index=False)}
 
-"""
-    
-    if 'annual_yield' in stats:
-        report += f"""
-MÉTRICAS DE DIVIDENDOS:
-- Dividend Yield Anual: {stats['annual_yield']*100:.2f}%
-- Dividend Yield Mensal: {stats.get('monthly_yield', 0)*100:.2f}%
-"""
-    
-    report += f"""
-{'='*80}
-2. COMPOSIÇÃO DO PORTFÓLIO
-{'='*80}
-
-"""
-    
-    weights_df = pd.DataFrame({
-        'Ticker': list(weights.keys()),
-        'Peso (%)': [w * 100 for w in weights.values()]
-    })
-    weights_df = weights_df.sort_values('Peso (%)', ascending=False)
-    
-    for _, row in weights_df.iterrows():
-        report += f"{row['Ticker']:10s} {row['Peso (%)']:6.2f}%\n"
-    
-    if st.session_state.share_quantities:
-        report += f"""
-{'='*80}
-3. PLANO DE INVESTIMENTO
-{'='*80}
-
-Valor a Investir: R$ {st.session_state.investment_amount:,.2f}
-
-QUANTIDADES POR ATIVO:
-"""
+Total Alocado: R$ {df_alocacao['Valor Real'].sum():,.2f}
+Sobra: R$ {valor_investimento - df_alocacao['Valor Real'].sum():,.2f}
+            """
+            
+            st.download_button(
+                "📄 Baixar Resumo (TXT)",
+                data=resumo_texto,
+                file_name=f"resumo_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
+                mime="text/plain",
+                use_container_width=True
+            )
         
-        current_prices = data.get_current_prices(list(weights.keys()))
+        st.markdown("---")
         
-        for ticker, qty in st.session_state.share_quantities.items():
-            price = current_prices.get(ticker, 0)
-            value = qty * price
-            report += f"\n{ticker}\n"
-            report += f"  Quantidade: {qty} ações\n"
-            report += f"  Preço: R$ {price:.2f}\n"
-            report += f"  Valor Total: R$ {value:,.2f}\n"
+        # Disclaimer
+        st.warning("""
+        **⚠️ Aviso Legal**
+        
+        Esta recomendação é baseada em análise quantitativa e não constitui consultoria financeira.
+        Rentabilidade passada não garante resultados futuros. Consulte um profissional certificado
+        antes de tomar decisões de investimento. Investimentos em renda variável envolvem riscos.
+        """)
     
-    report += f"""
-{'='*80}
-4. AVISOS E DISCLAIMERS
-{'='*80}
-
-Este relatório é gerado por uma ferramenta de análise quantitativa e não
-constitui recomendação de investimento. As projeções são baseadas em dados
-históricos e não garantem resultados futuros.
-
-RISCOS:
-- Volatilidade do mercado
-- Risco de liquidez
-- Risco de concentração setorial
-- Risco cambial (se aplicável)
-- Risco de crédito
-
-RECOMENDAÇÕES:
-- Consulte um profissional certificado antes de investir
-- Diversifique seus investimentos
-- Reavalie periodicamente sua carteira
-- Mantenha reserva de emergência
-
-{'='*80}
-Relatório gerado por Portfolio B3 Analytics
-© 2025 - Todos os direitos reservados
-{'='*80}
-"""
-    
-    return report
-
-
-def main():
-    """Função principal da página."""
-    
-    initialize_session_state()
-    
-    # Header
-    st.markdown('<p class="gradient-title">📋 Resumo Executivo</p>', unsafe_allow_html=True)
-    
-    st.markdown("""
-    Recomendação final personalizada com plano de investimento detalhado e quantidades 
-    exatas de ações a comprar.
-    """)
-    
-    # Verificar pré-requisitos
-    if not check_prerequisites():
-        st.stop()
-    
-    st.markdown("---")
-    
-    # Tabs principais
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "🎯 Recomendação",
-        "📊 Detalhes",
-        "💵 Plano de Investimento",
-        "📄 Relatório"
-    ])
-    
-    with tab1:
-        show_recommendation()
-    
-    with tab2:
-        show_portfolio_details()
-    
-    with tab3:
-        calculate_investment_plan()
-    
-    with tab4:
-        generate_executive_report()
-    
-    # Footer
-    st.markdown("---")
-    st.markdown("""
-        <div style="text-align: center; color: #666; padding: 1rem 0;">
-            <p>✅ Análise completa! Você pode voltar às páginas anteriores para ajustar ou explorar outras opções.</p>
-        </div>
-    """, unsafe_allow_html=True)
+    else:
+        st.info("👈 Configure o valor a investir na barra lateral e clique em **Gerar Recomendação**")
+        
+        # Informações
+        with st.expander("ℹ️ Como funciona a recomendação"):
+            st.markdown("""
+            ### 🎯 Sistema de Recomendação Inteligente
+            
+            O sistema analisa múltiplos fatores para recomendar o melhor portfólio:
+            
+            **Análise Técnica:**
+            - Retorno esperado
+            - Volatilidade (risco)
+            - Sharpe Ratio
+            - Correlação entre ativos
+            
+            **Análise Fundamental:**
+            - Dividend Yield
+            - Regularidade de dividendos
+            - Qualidade dos ativos
+            
+            **Perfil do Investidor:**
+            - Conservador: < R$ 10.000
+            - Moderado: R$ 10.000 - R$ 50.000
+            - Agressivo: > R$ 50.000
+            
+            **Score de Adequação:**
+            - Combina todos os fatores
+            - Ajusta por perfil
+            - Recomenda o mais adequado
+            
+            ### 📊 Portfólios Disponíveis
+            
+            **Máximo Sharpe:** Melhor relação risco-retorno  
+            **Mínima Volatilidade:** Menor risco possível  
+            **Dividendos Regulares:** Foco em renda passiva (se disponível)
+            """)
 
 
 if __name__ == "__main__":
