@@ -1,443 +1,441 @@
 """
-core/data.py
-Sistema de coleta, cache e limpeza de dados da B3
-VERSÃO SIMPLIFICADA - Apenas yfinance (sem mock)
+Módulo principal de gerenciamento de dados
+Responsável por buscar cotações, dividendos e informações de ativos
 """
 
-import streamlit as st
 import yfinance as yf
+import requests
 import pandas as pd
-import numpy as np
 from datetime import datetime, timedelta
-from pathlib import Path
-import logging
-import pickle
-import hashlib
-from typing import List, Dict, Tuple, Optional, Union
 import time
-import warnings
+import logging
+from typing import Optional, Dict, Any, List
 
-warnings.filterwarnings('ignore')
-
+# Configuração de logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Diretórios
-CACHE_DIR = Path("cache")
-CACHE_DIR.mkdir(exist_ok=True)
 
-ASSETS_DIR = Path("assets")
-B3_UNIVERSE_FILE = ASSETS_DIR / "b3_universe.csv"
+# ==========================================
+# CLASSE PRINCIPAL DE GERENCIAMENTO DE DADOS
+# ==========================================
 
-
-class DataCache:
-    """Gerenciador de cache em disco para dados históricos."""
+class DataManager:
+    """Gerenciador de dados de ativos financeiros"""
     
-    def __init__(self, cache_dir: Path = CACHE_DIR):
-        self.cache_dir = cache_dir
-        self.cache_dir.mkdir(exist_ok=True)
+    def __init__(self):
+        """Inicializa o gerenciador de dados"""
+        self.brapi_base_url = "https://brapi.dev/api"
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
+        self.max_retries = 3
+        self.timeout = 10
     
-    def get_cache_key(self, tickers: List[str], start_date: datetime, 
-                     end_date: datetime, data_type: str = "prices") -> str:
-        """Gera chave única para combinação de parâmetros."""
-        tickers_sorted = sorted(tickers)
-        key_string = f"{data_type}_{tickers_sorted}_{start_date.date()}_{end_date.date()}"
-        return hashlib.md5(key_string.encode()).hexdigest()
+    # ==========================================
+    # FUNÇÕES DE NORMALIZAÇÃO DE TICKERS
+    # ==========================================
     
-    def load_from_cache(self, cache_key: str, max_age_hours: int = 24) -> Optional[pd.DataFrame]:
-        """Carrega dados do cache se ainda válidos."""
-        cache_file = self.cache_dir / f"{cache_key}.pkl"
+    def normalizar_ticker_yahoo(self, ticker: str) -> str:
+        """
+        Normaliza ticker para formato Yahoo Finance (.SA)
         
-        if not cache_file.exists():
-            return None
+        Args:
+            ticker: Código do ativo (ex: PETR4, MXRF11)
+            
+        Returns:
+            Ticker formatado (ex: PETR4.SA)
+        """
+        ticker = ticker.upper().strip()
+        if not ticker.endswith('.SA'):
+            ticker += '.SA'
+        return ticker
+    
+    def normalizar_ticker_brapi(self, ticker: str) -> str:
+        """
+        Normaliza ticker para formato BRAPI (sem .SA)
         
-        file_age_hours = (time.time() - cache_file.stat().st_mtime) / 3600
+        Args:
+            ticker: Código do ativo
+            
+        Returns:
+            Ticker sem sufixo .SA
+        """
+        return ticker.upper().strip().replace('.SA', '')
+    
+    # ==========================================
+    # FUNÇÕES DE BUSCA DE PREÇO ATUAL
+    # ==========================================
+    
+    def obter_preco_atual(self, ticker: str) -> Optional[float]:
+        """
+        Busca preço atual do ativo com fallback entre APIs
         
-        if file_age_hours > max_age_hours:
-            logger.info(f"Cache expirado: {cache_key} ({file_age_hours:.1f}h)")
-            return None
+        Args:
+            ticker: Código do ativo
+            
+        Returns:
+            Preço atual ou None se falhar
+        """
+        logger.info(f"Buscando preço para {ticker}")
+        
+        # Tentativa 1: Yahoo Finance
+        preco = self._buscar_preco_yahoo(ticker)
+        if preco is not None:
+            logger.info(f"✓ Preço obtido via Yahoo Finance: R$ {preco:.2f}")
+            return preco
+        
+        # Tentativa 2: BRAPI (fallback)
+        logger.warning(f"⚠ Yahoo Finance falhou, tentando BRAPI para {ticker}")
+        preco = self._buscar_preco_brapi(ticker)
+        if preco is not None:
+            logger.info(f"✓ Preço obtido via BRAPI: R$ {preco:.2f}")
+            return preco
+        
+        logger.error(f"✗ Não foi possível obter preço para {ticker}")
+        return None
+    
+    def _buscar_preco_yahoo(self, ticker: str) -> Optional[float]:
+        """
+        Busca preço usando Yahoo Finance com retry
+        
+        Args:
+            ticker: Código do ativo
+            
+        Returns:
+            Preço ou None
+        """
+        yahoo_ticker = self.normalizar_ticker_yahoo(ticker)
+        
+        for tentativa in range(self.max_retries):
+            try:
+                stock = yf.Ticker(yahoo_ticker)
+                
+                # Método 1: Tentar via info
+                info = stock.info
+                if info:
+                    preco = info.get('currentPrice') or info.get('regularMarketPrice')
+                    if preco and preco > 0:
+                        return float(preco)
+                
+                # Método 2: Tentar via histórico recente
+                hist = stock.history(period='5d')
+                if not hist.empty and len(hist) > 0:
+                    ultimo_preco = hist['Close'].iloc[-1]
+                    if ultimo_preco > 0:
+                        return float(ultimo_preco)
+                
+                # Método 3: Tentar fast_info
+                try:
+                    fast_info = stock.fast_info
+                    if hasattr(fast_info, 'last_price') and fast_info.last_price > 0:
+                        return float(fast_info.last_price)
+                except:
+                    pass
+                
+            except Exception as e:
+                logger.warning(f"Yahoo tentativa {tentativa + 1}/{self.max_retries}: {str(e)}")
+                if tentativa < self.max_retries - 1:
+                    time.sleep(2 ** tentativa)  # Exponential backoff
+                continue
+        
+        return None
+    
+    def _buscar_preco_brapi(self, ticker: str) -> Optional[float]:
+        """
+        Busca preço usando BRAPI com retry
+        
+        Args:
+            ticker: Código do ativo
+            
+        Returns:
+            Preço ou None
+        """
+        brapi_ticker = self.normalizar_ticker_brapi(ticker)
+        
+        for tentativa in range(self.max_retries):
+            try:
+                url = f"{self.brapi_base_url}/quote/{brapi_ticker}"
+                response = self.session.get(url, timeout=self.timeout)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    
+                    if data and 'results' in data and len(data['results']) > 0:
+                        result = data['results'][0]
+                        preco = result.get('regularMarketPrice')
+                        
+                        if preco and preco > 0:
+                            return float(preco)
+                
+            except Exception as e:
+                logger.warning(f"BRAPI tentativa {tentativa + 1}/{self.max_retries}: {str(e)}")
+                if tentativa < self.max_retries - 1:
+                    time.sleep(2 ** tentativa)
+                continue
+        
+        return None
+    
+    # ==========================================
+    # FUNÇÕES DE BUSCA DE INFORMAÇÕES DO ATIVO
+    # ==========================================
+    
+    def obter_informacoes_ativo(self, ticker: str) -> Dict[str, Any]:
+        """
+        Busca informações detalhadas do ativo
+        
+        Args:
+            ticker: Código do ativo
+            
+        Returns:
+            Dicionário com informações do ativo
+        """
+        logger.info(f"Buscando informações para {ticker}")
+        
+        info_data = {
+            'ticker': ticker,
+            'nome': ticker,
+            'preco': None,
+            'moeda': 'BRL',
+            'valor_mercado': None,
+            'setor': None,
+            'industria': None,
+            'tipo': self._identificar_tipo_ativo(ticker)
+        }
+        
+        yahoo_ticker = self.normalizar_ticker_yahoo(ticker)
         
         try:
-            with open(cache_file, 'rb') as f:
-                data = pickle.load(f)
-            logger.info(f"Cache carregado: {cache_key} ({file_age_hours:.1f}h)")
-            return data
+            stock = yf.Ticker(yahoo_ticker)
+            stock_info = stock.info
+            
+            if stock_info:
+                info_data['nome'] = stock_info.get('longName') or stock_info.get('shortName') or ticker
+                info_data['valor_mercado'] = stock_info.get('marketCap')
+                info_data['setor'] = stock_info.get('sector')
+                info_data['industria'] = stock_info.get('industry')
+                
+                # Preço
+                preco = stock_info.get('currentPrice') or stock_info.get('regularMarketPrice')
+                if preco:
+                    info_data['preco'] = float(preco)
+            
         except Exception as e:
-            logger.error(f"Erro ao carregar cache {cache_key}: {e}")
-            return None
+            logger.warning(f"Erro ao buscar info via Yahoo: {str(e)}")
+        
+        # Se não conseguiu preço, busca separadamente
+        if info_data['preco'] is None:
+            info_data['preco'] = self.obter_preco_atual(ticker)
+        
+        return info_data
     
-    def save_to_cache(self, cache_key: str, data: pd.DataFrame):
-        """Salva dados no cache."""
-        cache_file = self.cache_dir / f"{cache_key}.pkl"
+    def _identificar_tipo_ativo(self, ticker: str) -> str:
+        """
+        Identifica o tipo de ativo pelo ticker
+        
+        Args:
+            ticker: Código do ativo
+            
+        Returns:
+            Tipo do ativo (ACAO, FII, ETF, etc)
+        """
+        ticker_limpo = ticker.replace('.SA', '').upper()
+        
+        # FIIs geralmente terminam com 11
+        if ticker_limpo.endswith('11'):
+            # Verificar se é ETF
+            etf_patterns = ['BOVA', 'SMAL', 'IVVB', 'PIBB']
+            if any(pattern in ticker_limpo for pattern in etf_patterns):
+                return 'ETF'
+            return 'FII'
+        
+        # Ações terminam com 3, 4, 5, 6, etc
+        if ticker_limpo[-1].isdigit():
+            return 'ACAO'
+        
+        return 'OUTRO'
+    
+    # ==========================================
+    # FUNÇÕES DE BUSCA DE DIVIDENDOS
+    # ==========================================
+    
+    def obter_dividendos(self, ticker: str, data_inicio: Optional[datetime] = None) -> pd.DataFrame:
+        """
+        Busca histórico de dividendos/proventos
+        
+        Args:
+            ticker: Código do ativo
+            data_inicio: Data inicial (padrão: 2 anos atrás)
+            
+        Returns:
+            DataFrame com colunas ['data', 'valor']
+        """
+        if data_inicio is None:
+            data_inicio = datetime.now() - timedelta(days=730)  # 2 anos
+        
+        logger.info(f"Buscando dividendos para {ticker} desde {data_inicio.date()}")
+        
+        yahoo_ticker = self.normalizar_ticker_yahoo(ticker)
         
         try:
-            with open(cache_file, 'wb') as f:
-                pickle.dump(data, f)
-            logger.info(f"Cache salvo: {cache_key}")
-        except Exception as e:
-            logger.error(f"Erro ao salvar cache {cache_key}: {e}")
-
-
-@st.cache_data(ttl=86400)
-def load_ticker_universe() -> pd.DataFrame:
-    """Carrega universo de tickers B3 com metadados."""
-    try:
-        if not B3_UNIVERSE_FILE.exists():
-            logger.error(f"Arquivo não encontrado: {B3_UNIVERSE_FILE}")
-            st.error(f"❌ Arquivo de universo não encontrado: {B3_UNIVERSE_FILE}")
-            return pd.DataFrame()
-        
-        df = pd.read_csv(B3_UNIVERSE_FILE)
-        
-        expected_cols = ['ticker', 'nome', 'setor', 'subsetor', 'segmento_listagem', 'tipo']
-        missing_cols = set(expected_cols) - set(df.columns)
-        
-        if missing_cols:
-            logger.error(f"Colunas faltando: {missing_cols}")
-            st.error(f"❌ Arquivo com formato inválido")
-            return pd.DataFrame()
-        
-        logger.info(f"Universo carregado: {len(df)} tickers")
-        return df
-    
-    except Exception as e:
-        logger.error(f"Erro ao carregar universo: {e}")
-        st.error(f"❌ Erro: {e}")
-        return pd.DataFrame()
-
-
-def download_ticker_data(ticker: str, start: datetime, end: datetime, 
-                        max_retries: int = 3) -> Optional[pd.DataFrame]:
-    """
-    Baixa dados de um ticker usando yf.Ticker().history() (mais confiável).
-    
-    Args:
-        ticker: Ticker do ativo
-        start: Data inicial
-        end: Data final
-        max_retries: Número máximo de tentativas
-    
-    Returns:
-        DataFrame com dados OHLCV ou None se falhar
-    """
-    for attempt in range(max_retries):
-        try:
-            # Usar yf.Ticker().history() ao invés de yf.download()
-            stock = yf.Ticker(ticker)
+            stock = yf.Ticker(yahoo_ticker)
+            dividendos = stock.dividends
             
-            # Baixar histórico
-            data = stock.history(start=start, end=end)
-            
-            if not data.empty:
-                logger.info(f"✅ {ticker}: {len(data)} dias baixados")
-                return data
-            else:
-                logger.warning(f"⚠️ {ticker}: sem dados no período")
+            if not dividendos.empty:
+                # Converter para DataFrame
+                df = pd.DataFrame({
+                    'data': dividendos.index,
+                    'valor': dividendos.values
+                })
                 
-        except Exception as e:
-            logger.warning(f"❌ {ticker} (tentativa {attempt+1}/{max_retries}): {e}")
+                # Filtrar por data
+                df = df[df['data'] >= data_inicio]
+                df = df.reset_index(drop=True)
+                
+                logger.info(f"✓ Encontrados {len(df)} dividendos para {ticker}")
+                return df
             
-            if attempt < max_retries - 1:
-                time.sleep(1)  # Pausa antes de tentar novamente
-    
-    return None
-
-
-def filter_traded_last_30d(df: pd.DataFrame, min_sessions: int = 5, 
-                          min_avg_volume: float = 100000,
-                          show_progress: bool = True) -> pd.DataFrame:
-    """
-    Filtra ativos negociados nos últimos 30 dias.
-    VERSÃO OTIMIZADA usando yf.Ticker().history()
-    """
-    if df.empty:
-        return df
-    
-    df = df.copy()
-    df['is_traded_30d'] = False
-    df['avg_volume_30d'] = 0.0
-    df['sessions_traded_30d'] = 0
-    
-    if show_progress:
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-    
-    total = len(df)
-    traded_count = 0
-    
-    # Calcular período
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=35)
-    
-    for idx, row in df.iterrows():
-        ticker = row['ticker']
+        except Exception as e:
+            logger.error(f"✗ Erro ao buscar dividendos de {ticker}: {str(e)}")
         
-        if show_progress:
-            status_text.text(f"Verificando: {ticker} ({idx+1}/{total})")
+        logger.warning(f"⚠ Nenhum dividendo encontrado para {ticker}")
+        return pd.DataFrame(columns=['data', 'valor'])
+    
+    # ==========================================
+    # FUNÇÕES DE BUSCA DE HISTÓRICO
+    # ==========================================
+    
+    def obter_historico(self, ticker: str, periodo: str = '1y', intervalo: str = '1d') -> pd.DataFrame:
+        """
+        Busca dados históricos de preços
+        
+        Args:
+            ticker: Código do ativo
+            periodo: Período (1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max)
+            intervalo: Intervalo (1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk, 1mo, 3mo)
+            
+        Returns:
+            DataFrame com histórico de preços
+        """
+        logger.info(f"Buscando histórico de {ticker} - período: {periodo}")
+        
+        yahoo_ticker = self.normalizar_ticker_yahoo(ticker)
         
         try:
-            # Usar função otimizada
-            data = download_ticker_data(ticker, start_date, end_date, max_retries=2)
+            stock = yf.Ticker(yahoo_ticker)
+            hist = stock.history(period=periodo, interval=intervalo)
             
-            if data is not None and not data.empty and 'Volume' in data.columns:
-                valid_sessions = data[data['Volume'] > 0]
-                
-                sessions_traded = len(valid_sessions)
-                avg_volume = valid_sessions['Volume'].mean() if len(valid_sessions) > 0 else 0
-                
-                df.at[idx, 'sessions_traded_30d'] = int(sessions_traded)
-                df.at[idx, 'avg_volume_30d'] = float(avg_volume)
-                
-                if sessions_traded >= min_sessions and avg_volume >= min_avg_volume:
-                    df.at[idx, 'is_traded_30d'] = True
-                    traded_count += 1
-        
-        except Exception as e:
-            logger.warning(f"Erro ao verificar {ticker}: {e}")
-            continue
-        
-        if show_progress:
-            progress_bar.progress((idx + 1) / total)
-    
-    if show_progress:
-        progress_bar.empty()
-        status_text.empty()
-    
-    logger.info(f"Ativos líquidos: {traded_count}/{total}")
-    
-    return df
-
-
-@st.cache_data(ttl=3600)
-def get_price_history(tickers: List[str], start: datetime, end: datetime,
-                     use_cache: bool = True) -> pd.DataFrame:
-    """
-    Obtém histórico de preços usando método otimizado.
-    """
-    if not tickers:
-        return pd.DataFrame()
-    
-    cache_manager = DataCache()
-    cache_key = cache_manager.get_cache_key(tickers, start, end, "prices")
-    
-    # Tentar cache
-    if use_cache:
-        cached_data = cache_manager.load_from_cache(cache_key)
-        if cached_data is not None:
-            st.success(f"✅ Dados carregados do cache ({len(cached_data)} dias)")
-            return cached_data
-    
-    st.info(f"📥 Baixando histórico de {len(tickers)} ativos...")
-    
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
-    prices_dict = {}
-    
-    for idx, ticker in enumerate(tickers):
-        status_text.text(f"Baixando: {ticker} ({idx+1}/{len(tickers)})")
-        
-        data = download_ticker_data(ticker, start, end)
-        
-        if data is not None and not data.empty:
-            # Usar Close como preço ajustado (yfinance já ajusta automaticamente)
-            if 'Close' in data.columns:
-                prices_dict[ticker] = data['Close']
-        
-        progress_bar.progress((idx + 1) / len(tickers))
-        
-        # Pequena pausa para não sobrecarregar
-        time.sleep(0.1)
-    
-    progress_bar.empty()
-    status_text.empty()
-    
-    if not prices_dict:
-        st.error("❌ Nenhum dado obtido")
-        return pd.DataFrame()
-    
-    prices_df = pd.DataFrame(prices_dict)
-    prices_df = prices_df.dropna(how='all')
-    prices_df = prices_df.sort_index()
-    
-    # Salvar cache
-    if use_cache and not prices_df.empty:
-        cache_manager.save_to_cache(cache_key, prices_df)
-    
-    st.success(f"✅ Obtidos: {len(prices_df)} dias, {len(prices_df.columns)} ativos")
-    
-    return prices_df
-
-
-@st.cache_data(ttl=3600)
-def get_dividends(tickers: List[str], start: datetime, end: datetime,
-                 use_cache: bool = True) -> Dict[str, pd.Series]:
-    """
-    Obtém histórico de dividendos usando método otimizado.
-    """
-    if not tickers:
-        return {}
-    
-    cache_manager = DataCache()
-    cache_key = cache_manager.get_cache_key(tickers, start, end, "dividends")
-    
-    # Tentar cache
-    if use_cache:
-        cached_data = cache_manager.load_from_cache(cache_key, max_age_hours=12)
-        if cached_data is not None:
-            st.success(f"✅ Dividendos carregados do cache")
-            return {col: cached_data[col].dropna() for col in cached_data.columns}
-    
-    st.info(f"📥 Baixando dividendos de {len(tickers)} ativos...")
-    
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
-    dividends_dict = {}
-    success_count = 0
-    
-    for idx, ticker in enumerate(tickers):
-        status_text.text(f"Obtendo dividendos: {ticker} ({idx+1}/{len(tickers)})")
-        
-        try:
-            stock = yf.Ticker(ticker)
-            divs = stock.dividends
+            if not hist.empty:
+                logger.info(f"✓ Histórico obtido: {len(hist)} registros")
+                return hist
             
-            if not divs.empty:
-                # Filtrar por período
-                divs = divs[(divs.index >= start) & (divs.index <= end)]
-                
-                if not divs.empty:
-                    dividends_dict[ticker] = divs
-                    success_count += 1
-        
         except Exception as e:
-            logger.warning(f"Erro ao obter dividendos de {ticker}: {e}")
+            logger.error(f"✗ Erro ao buscar histórico de {ticker}: {str(e)}")
         
-        progress_bar.progress((idx + 1) / len(tickers))
-        time.sleep(0.1)
-    
-    progress_bar.empty()
-    status_text.empty()
-    
-    # Salvar cache
-    if dividends_dict:
-        all_dates = pd.DatetimeIndex([])
-        for series in dividends_dict.values():
-            all_dates = all_dates.union(series.index)
-        
-        divs_df = pd.DataFrame(index=all_dates.sort_values())
-        for ticker, series in dividends_dict.items():
-            divs_df[ticker] = series
-        
-        if use_cache:
-            cache_manager.save_to_cache(cache_key, divs_df)
-        
-        st.success(f"✅ Dividendos: {success_count}/{len(tickers)} ativos")
-    else:
-        st.warning("⚠️ Nenhum dividendo encontrado")
-    
-    return dividends_dict
-
-
-@st.cache_data(ttl=1800)
-def get_current_prices(tickers: List[str]) -> Dict[str, float]:
-    """Obtém preços atuais."""
-    if not tickers:
-        return {}
-    
-    prices = {}
-    end = datetime.now()
-    start = end - timedelta(days=7)
-    
-    st.info("📥 Obtendo preços atuais...")
-    
-    for ticker in tickers:
-        data = download_ticker_data(ticker, start, end)
-        
-        if data is not None and not data.empty and 'Close' in data.columns:
-            last_price = data['Close'].iloc[-1]
-            if not np.isnan(last_price):
-                prices[ticker] = float(last_price)
-    
-    st.success(f"✅ Preços obtidos: {len(prices)} ativos")
-    
-    return prices
-
-
-def validate_data_quality(prices_df: pd.DataFrame, 
-                         min_data_points: int = 252,
-                         max_missing_pct: float = 0.1) -> Tuple[pd.DataFrame, List[str], Dict[str, str]]:
-    """Valida qualidade dos dados."""
-    if prices_df.empty:
-        return prices_df, [], {}
-    
-    removed_tickers = []
-    removal_reasons = {}
-    
-    total_days = len(prices_df)
-    
-    for col in prices_df.columns:
-        valid_points = prices_df[col].notna().sum()
-        missing_pct = 1 - (valid_points / total_days)
-        
-        if valid_points < min_data_points:
-            removed_tickers.append(col)
-            removal_reasons[col] = f"Dados insuficientes: {valid_points} pontos"
-            continue
-        
-        if missing_pct > max_missing_pct:
-            removed_tickers.append(col)
-            removal_reasons[col] = f"Muitos dados faltantes: {missing_pct*100:.1f}%"
-            continue
-    
-    clean_df = prices_df.drop(columns=removed_tickers, errors='ignore')
-    
-    if clean_df.empty:
-        st.error("❌ Todos os ativos removidos por dados insuficientes")
-        return clean_df, removed_tickers, removal_reasons
-    
-    # Forward fill
-    clean_df = clean_df.fillna(method='ffill', limit=5)
-    clean_df = clean_df.dropna(how='any')
-    
-    if removed_tickers:
-        st.warning(f"⚠️ {len(removed_tickers)} ativos removidos")
-        
-        with st.expander("Ver detalhes"):
-            for ticker, reason in removal_reasons.items():
-                st.text(f"• {ticker}: {reason}")
-    
-    return clean_df, removed_tickers, removal_reasons
-
-
-def calculate_returns(prices_df: pd.DataFrame, method: str = 'simple') -> pd.DataFrame:
-    """Calcula retornos diários."""
-    if prices_df.empty:
+        logger.warning(f"⚠ Nenhum histórico encontrado para {ticker}")
         return pd.DataFrame()
     
-    if method == 'log':
-        returns = np.log(prices_df / prices_df.shift(1))
-    else:
-        returns = prices_df.pct_change()
+    # ==========================================
+    # FUNÇÕES DE BUSCA EM LOTE
+    # ==========================================
     
-    return returns.dropna()
+    def obter_precos_lote(self, tickers: List[str]) -> Dict[str, Optional[float]]:
+        """
+        Busca preços de múltiplos ativos
+        
+        Args:
+            tickers: Lista de códigos de ativos
+            
+        Returns:
+            Dicionário {ticker: preço}
+        """
+        logger.info(f"Buscando preços para {len(tickers)} ativos")
+        
+        precos = {}
+        for ticker in tickers:
+            precos[ticker] = self.obter_preco_atual(ticker)
+            time.sleep(0.5)  # Evitar rate limiting
+        
+        return precos
+    
+    # ==========================================
+    # FUNÇÕES DE TESTE
+    # ==========================================
+    
+    def testar_conexao(self) -> Dict[str, bool]:
+        """
+        Testa conectividade com as APIs
+        
+        Returns:
+            Dicionário com status de cada API
+        """
+        logger.info("Testando conexão com APIs...")
+        
+        resultados = {
+            'yahoo_finance': False,
+            'brapi': False
+        }
+        
+        # Testar Yahoo Finance
+        try:
+            test_ticker = yf.Ticker('PETR4.SA')
+            info = test_ticker.info
+            if info and len(info) > 0:
+                resultados['yahoo_finance'] = True
+                logger.info("✓ Yahoo Finance: OK")
+        except Exception as e:
+            logger.error(f"✗ Yahoo Finance: FALHOU - {str(e)}")
+        
+        # Testar BRAPI
+        try:
+            response = self.session.get(
+                f"{self.brapi_base_url}/quote/PETR4",
+                timeout=self.timeout
+            )
+            if response.status_code == 200:
+                data = response.json()
+                if data and 'results' in data:
+                    resultados['brapi'] = True
+                    logger.info("✓ BRAPI: OK")
+        except Exception as e:
+            logger.error(f"✗ BRAPI: FALHOU - {str(e)}")
+        
+        return resultados
 
 
-def verify_module():
-    """Verifica configuração do módulo."""
-    checks = {
-        'cache_dir_exists': CACHE_DIR.exists(),
-        'assets_dir_exists': ASSETS_DIR.exists(),
-        'universe_file_exists': B3_UNIVERSE_FILE.exists(),
-    }
-    
-    all_ok = all(checks.values())
-    
-    if not all_ok:
-        logger.warning(f"Verificação: {checks}")
-    
-    return all_ok
+# ==========================================
+# INSTÂNCIA GLOBAL DO GERENCIADOR
+# ==========================================
+
+# Criar instância global para uso em todo o app
+data_manager = DataManager()
 
 
-if __name__ != "__main__":
-    verify_module()
+# ==========================================
+# FUNÇÕES DE CONVENIÊNCIA
+# ==========================================
+
+def obter_preco(ticker: str) -> Optional[float]:
+    """Função de conveniência para obter preço"""
+    return data_manager.obter_preco_atual(ticker)
+
+
+def obter_info(ticker: str) -> Dict[str, Any]:
+    """Função de conveniência para obter informações"""
+    return data_manager.obter_informacoes_ativo(ticker)
+
+
+def obter_dividendos(ticker: str) -> pd.DataFrame:
+    """Função de conveniência para obter dividendos"""
+    return data_manager.obter_dividendos(ticker)
+
+
+def obter_historico(ticker: str, periodo: str = '1y') -> pd.DataFrame:
+    """Função de conveniência para obter histórico"""
+    return data_manager.obter_historico(ticker, periodo)
+
+
+def testar_apis() -> Dict[str, bool]:
+    """Função de conveniência para testar APIs"""
+    return data_manager.testar_conexao()
