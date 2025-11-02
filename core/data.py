@@ -1,49 +1,40 @@
 """
-Módulo principal de gerenciamento de dados
-Responsável por buscar cotações, dividendos e informações de ativos
+Módulo de gerenciamento de dados usando BRAPI
+API brasileira para dados da B3
 """
 
-import yfinance as yf
+import requests
 import pandas as pd
 from datetime import datetime, timedelta
 import time
 import logging
 from typing import Optional, Dict, Any, List
 
-# Configuração de logging detalhado
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 class DataManager:
-    """Gerenciador de dados de ativos financeiros"""
+    """Gerenciador de dados usando BRAPI"""
     
     def __init__(self):
         """Inicializa o gerenciador"""
-        self.max_retries = 3
-        logger.info("DataManager inicializado")
+        self.base_url = "https://brapi.dev/api"
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0',
+            'Accept': 'application/json'
+        })
+        self.timeout = 30
+        logger.info("DataManager inicializado com BRAPI")
     
     # ==========================================
-    # NORMALIZAÇÃO DE TICKERS
+    # NORMALIZAÇÃO
     # ==========================================
     
-    def _normalize_ticker(self, ticker: str) -> str:
-        """
-        Normaliza ticker para formato Yahoo Finance
-        
-        Args:
-            ticker: Código do ativo
-            
-        Returns:
-            Ticker com .SA
-        """
-        ticker = str(ticker).upper().strip()
-        if not ticker.endswith('.SA'):
-            ticker = f"{ticker}.SA"
-        return ticker
+    def _clean_ticker(self, ticker: str) -> str:
+        """Remove .SA do ticker"""
+        return str(ticker).upper().strip().replace('.SA', '')
     
     # ==========================================
     # BUSCA DE PREÇO ATUAL
@@ -51,240 +42,254 @@ class DataManager:
     
     def obter_preco_atual(self, ticker: str) -> Optional[float]:
         """
-        Busca preço atual do ativo
+        Busca preço atual via BRAPI
         
         Args:
             ticker: Código do ativo
             
         Returns:
-            Preço atual ou None se falhar
+            Preço atual ou None
         """
-        ticker_normalizado = self._normalize_ticker(ticker)
-        logger.info(f"Buscando preço de {ticker_normalizado}")
+        ticker_limpo = self._clean_ticker(ticker)
         
         try:
-            # Criar ticker
-            stock = yf.Ticker(ticker_normalizado)
+            url = f"{self.base_url}/quote/{ticker_limpo}"
+            response = self.session.get(url, timeout=self.timeout)
             
-            # Tentar obter histórico recente (mais confiável)
-            hist = stock.history(period='5d')
-            
-            if not hist.empty and len(hist) > 0:
-                preco = float(hist['Close'].iloc[-1])
-                logger.info(f"✓ {ticker}: R$ {preco:.2f}")
-                return preco
-            else:
-                logger.warning(f"⚠ {ticker}: histórico vazio")
-                return None
+            if response.status_code == 200:
+                data = response.json()
                 
+                if data.get('results') and len(data['results']) > 0:
+                    result = data['results'][0]
+                    preco = result.get('regularMarketPrice')
+                    
+                    if preco and preco > 0:
+                        logger.info(f"✓ {ticker}: R$ {preco:.2f}")
+                        return float(preco)
+            
+            logger.warning(f"⚠ {ticker}: sem preço disponível")
+            return None
+            
         except Exception as e:
-            logger.error(f"✗ Erro ao buscar {ticker}: {str(e)}")
+            logger.error(f"✗ {ticker}: erro - {str(e)}")
             return None
     
     # ==========================================
-    # BUSCA DE HISTÓRICO - MÉTODO SIMPLIFICADO
+    # BUSCA DE HISTÓRICO
     # ==========================================
-    
-    def _download_single_ticker(
-        self, 
-        ticker: str, 
-        start_date: datetime, 
-        end_date: datetime
-    ) -> Optional[pd.Series]:
-        """
-        Baixa histórico de um único ticker
-        
-        Args:
-            ticker: Código do ativo
-            start_date: Data inicial
-            end_date: Data final
-            
-        Returns:
-            Series com preços de fechamento ou None
-        """
-        ticker_normalizado = self._normalize_ticker(ticker)
-        
-        try:
-            logger.info(f"  Baixando {ticker_normalizado}...")
-            
-            # Usar yf.download que é mais robusto
-            data = yf.download(
-                ticker_normalizado,
-                start=start_date.strftime('%Y-%m-%d'),
-                end=(end_date + timedelta(days=1)).strftime('%Y-%m-%d'),
-                progress=False,
-                show_errors=False
-            )
-            
-            # Verificar se obteve dados
-            if data.empty:
-                logger.warning(f"    ⚠ {ticker}: sem dados retornados")
-                return None
-            
-            # Extrair coluna Close
-            if 'Close' in data.columns:
-                series = data['Close']
-            elif isinstance(data.columns, pd.MultiIndex):
-                # Caso tenha MultiIndex (quando baixa múltiplos tickers)
-                if ('Close', ticker_normalizado) in data.columns:
-                    series = data[('Close', ticker_normalizado)]
-                else:
-                    series = data['Close'].iloc[:, 0]
-            else:
-                logger.warning(f"    ⚠ {ticker}: estrutura de dados inesperada")
-                return None
-            
-            # Remover NaN
-            series = series.dropna()
-            
-            if len(series) > 0:
-                logger.info(f"    ✓ {ticker}: {len(series)} registros")
-                return series
-            else:
-                logger.warning(f"    ⚠ {ticker}: série vazia após limpeza")
-                return None
-                
-        except Exception as e:
-            logger.error(f"    ✗ {ticker}: erro - {str(e)}")
-            return None
     
     def get_price_history(
-        self, 
-        tickers: List[str], 
-        start_date: datetime, 
+        self,
+        tickers: List[str],
+        start_date: datetime,
         end_date: datetime,
         use_cache: bool = True
     ) -> pd.DataFrame:
         """
-        Busca histórico de preços para múltiplos ativos
+        Busca histórico de preços via BRAPI
         
         Args:
-            tickers: Lista de códigos de ativos
+            tickers: Lista de códigos
             start_date: Data inicial
             end_date: Data final
-            use_cache: Usar cache (ignorado nesta versão)
+            use_cache: Ignorado (mantido para compatibilidade)
             
         Returns:
-            DataFrame com histórico (índice: data, colunas: tickers)
+            DataFrame com histórico
         """
         logger.info("=" * 60)
-        logger.info(f"INICIANDO BUSCA DE HISTÓRICO")
+        logger.info(f"BUSCA DE HISTÓRICO VIA BRAPI")
         logger.info(f"Ativos: {len(tickers)}")
         logger.info(f"Período: {start_date.date()} até {end_date.date()}")
         logger.info("=" * 60)
         
-        # Validar datas
-        if start_date >= end_date:
-            logger.error("✗ Data inicial deve ser anterior à data final")
-            return pd.DataFrame()
+        # Calcular range (BRAPI usa range em texto)
+        dias = (end_date - start_date).days
         
-        # Validar tickers
-        if not tickers or len(tickers) == 0:
-            logger.error("✗ Lista de tickers vazia")
-            return pd.DataFrame()
+        if dias <= 7:
+            range_param = "5d"
+        elif dias <= 30:
+            range_param = "1mo"
+        elif dias <= 90:
+            range_param = "3mo"
+        elif dias <= 180:
+            range_param = "6mo"
+        elif dias <= 365:
+            range_param = "1y"
+        elif dias <= 730:
+            range_param = "2y"
+        else:
+            range_param = "5y"
         
-        # Dicionário para armazenar os dados
+        logger.info(f"Range calculado: {range_param}")
+        
         all_data = {}
         sucessos = 0
         falhas = 0
         
-        # Processar cada ticker individualmente
         for idx, ticker in enumerate(tickers, 1):
-            logger.info(f"\n[{idx}/{len(tickers)}] Processando {ticker}")
+            logger.info(f"[{idx}/{len(tickers)}] Processando {ticker}")
             
-            # Baixar dados
-            series = self._download_single_ticker(ticker, start_date, end_date)
+            series = self._buscar_historico_ativo(ticker, range_param, start_date, end_date)
             
             if series is not None and not series.empty:
                 all_data[ticker] = series
                 sucessos += 1
+                logger.info(f"  ✓ {len(series)} registros")
             else:
                 falhas += 1
+                logger.warning(f"  ✗ Sem dados")
             
-            # Pequeno delay para evitar rate limiting
+            # Delay entre requisições
             if idx < len(tickers):
                 time.sleep(0.5)
         
-        # Resumo
-        logger.info("\n" + "=" * 60)
-        logger.info(f"RESUMO: {sucessos} sucessos, {falhas} falhas")
-        logger.info("=" * 60)
+        logger.info(f"\nRESUMO: {sucessos} sucessos, {falhas} falhas")
         
-        # Criar DataFrame
         if all_data:
-            try:
-                df = pd.DataFrame(all_data)
-                
-                # Ordenar por data
-                df = df.sort_index()
-                
-                logger.info(f"✓ DataFrame criado: {len(df)} linhas x {len(df.columns)} colunas")
-                logger.info(f"✓ Período real: {df.index[0].date()} até {df.index[-1].date()}")
-                
-                return df
-                
-            except Exception as e:
-                logger.error(f"✗ Erro ao criar DataFrame: {str(e)}")
-                return pd.DataFrame()
-        else:
-            logger.error("✗ Nenhum dado foi obtido para nenhum ativo")
-            return pd.DataFrame()
+            df = pd.DataFrame(all_data)
+            df = df.sort_index()
+            
+            logger.info(f"✓ DataFrame: {len(df)} linhas x {len(df.columns)} colunas")
+            return df
+        
+        logger.error("✗ Nenhum dado obtido")
+        return pd.DataFrame()
+    
+    def _buscar_historico_ativo(
+        self,
+        ticker: str,
+        range_param: str,
+        start_date: datetime,
+        end_date: datetime
+    ) -> Optional[pd.Series]:
+        """
+        Busca histórico de um ativo via BRAPI
+        
+        Args:
+            ticker: Código do ativo
+            range_param: Range (5d, 1mo, 3mo, 6mo, 1y, 2y, 5y)
+            start_date: Data inicial para filtro
+            end_date: Data final para filtro
+            
+        Returns:
+            Series com preços ou None
+        """
+        ticker_limpo = self._clean_ticker(ticker)
+        
+        try:
+            url = f"{self.base_url}/quote/{ticker_limpo}"
+            params = {
+                'range': range_param,
+                'interval': '1d',
+                'fundamental': 'false'
+            }
+            
+            response = self.session.get(url, params=params, timeout=self.timeout)
+            
+            if response.status_code != 200:
+                logger.warning(f"  Status code: {response.status_code}")
+                return None
+            
+            data = response.json()
+            
+            if not data.get('results') or len(data['results']) == 0:
+                logger.warning(f"  Sem resultados na resposta")
+                return None
+            
+            result = data['results'][0]
+            historical_data = result.get('historicalDataPrice', [])
+            
+            if not historical_data:
+                logger.warning(f"  Sem dados históricos")
+                return None
+            
+            # Converter para DataFrame
+            df = pd.DataFrame(historical_data)
+            
+            # Converter timestamp para datetime
+            df['date'] = pd.to_datetime(df['date'], unit='s')
+            
+            # Filtrar por período solicitado
+            df = df[(df['date'] >= start_date) & (df['date'] <= end_date)]
+            
+            if df.empty:
+                logger.warning(f"  Dados vazios após filtro de data")
+                return None
+            
+            # Criar Series com preço de fechamento
+            df = df.set_index('date')
+            series = df['close'].sort_index()
+            
+            return series
+            
+        except Exception as e:
+            logger.error(f"  Erro: {str(e)}")
+            return None
     
     # ==========================================
     # BUSCA DE DIVIDENDOS
     # ==========================================
     
     def get_dividends(
-        self, 
-        ticker: str, 
+        self,
+        ticker: str,
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None
     ) -> pd.DataFrame:
         """
-        Busca histórico de dividendos
+        Busca dividendos via BRAPI
         
         Args:
             ticker: Código do ativo
-            start_date: Data inicial (padrão: 2 anos atrás)
-            end_date: Data final (opcional)
+            start_date: Data inicial
+            end_date: Data final
             
         Returns:
-            DataFrame com colunas ['data', 'valor']
+            DataFrame com dividendos
         """
         if start_date is None:
             start_date = datetime.now() - timedelta(days=730)
         
-        ticker_normalizado = self._normalize_ticker(ticker)
-        logger.info(f"Buscando dividendos de {ticker_normalizado}")
+        ticker_limpo = self._clean_ticker(ticker)
         
         try:
-            stock = yf.Ticker(ticker_normalizado)
-            dividends = stock.dividends
+            url = f"{self.base_url}/quote/{ticker_limpo}"
+            params = {'dividends': 'true'}
             
-            if not dividends.empty:
-                # Converter para DataFrame
-                df = pd.DataFrame({
-                    'data': dividends.index,
-                    'valor': dividends.values
-                })
+            response = self.session.get(url, params=params, timeout=self.timeout)
+            
+            if response.status_code == 200:
+                data = response.json()
                 
-                # Filtrar por data
-                df = df[df['data'] >= start_date]
-                
-                if end_date:
-                    df = df[df['data'] <= end_date]
-                
-                df = df.reset_index(drop=True)
-                
-                logger.info(f"✓ {ticker}: {len(df)} dividendos encontrados")
-                return df
-            else:
-                logger.warning(f"⚠ {ticker}: sem dividendos")
-                return pd.DataFrame(columns=['data', 'valor'])
-                
+                if data.get('results') and len(data['results']) > 0:
+                    result = data['results'][0]
+                    dividends_data = result.get('dividendsData', {})
+                    cash_dividends = dividends_data.get('cashDividends', [])
+                    
+                    if cash_dividends:
+                        df = pd.DataFrame(cash_dividends)
+                        
+                        # Converter paymentDate para datetime
+                        df['data'] = pd.to_datetime(df['paymentDate'])
+                        df['valor'] = df['rate']
+                        
+                        # Filtrar por data
+                        df = df[df['data'] >= start_date]
+                        if end_date:
+                            df = df[df['data'] <= end_date]
+                        
+                        df = df[['data', 'valor']].reset_index(drop=True)
+                        
+                        logger.info(f"✓ {ticker}: {len(df)} dividendos")
+                        return df
+            
+            logger.warning(f"⚠ {ticker}: sem dividendos")
+            
         except Exception as e:
-            logger.error(f"✗ Erro ao buscar dividendos de {ticker}: {str(e)}")
-            return pd.DataFrame(columns=['data', 'valor'])
+            logger.error(f"✗ {ticker}: erro - {str(e)}")
+        
+        return pd.DataFrame(columns=['data', 'valor'])
     
     # ==========================================
     # BUSCA EM LOTE
@@ -292,7 +297,7 @@ class DataManager:
     
     def get_current_prices(self, tickers: List[str]) -> Dict[str, Optional[float]]:
         """
-        Busca preços atuais de múltiplos ativos
+        Busca preços de múltiplos ativos
         
         Args:
             tickers: Lista de códigos
@@ -302,6 +307,37 @@ class DataManager:
         """
         logger.info(f"Buscando preços de {len(tickers)} ativos")
         
+        # BRAPI permite buscar múltiplos de uma vez
+        tickers_limpos = [self._clean_ticker(t) for t in tickers]
+        tickers_str = ','.join(tickers_limpos)
+        
+        try:
+            url = f"{self.base_url}/quote/{tickers_str}"
+            response = self.session.get(url, timeout=self.timeout)
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                if data.get('results'):
+                    precos = {}
+                    
+                    for result in data['results']:
+                        ticker_original = result['symbol']
+                        preco = result.get('regularMarketPrice')
+                        
+                        # Encontrar ticker original na lista
+                        for t in tickers:
+                            if self._clean_ticker(t) == ticker_original:
+                                precos[t] = float(preco) if preco else None
+                                break
+                    
+                    return precos
+        
+        except Exception as e:
+            logger.error(f"Erro na busca em lote: {str(e)}")
+        
+        # Fallback: buscar um por um
+        logger.warning("Fallback: buscando preços individualmente")
         precos = {}
         for ticker in tickers:
             precos[ticker] = self.obter_preco_atual(ticker)
@@ -315,7 +351,7 @@ class DataManager:
     
     def obter_informacoes_ativo(self, ticker: str) -> Dict[str, Any]:
         """
-        Busca informações básicas do ativo
+        Busca informações do ativo
         
         Args:
             ticker: Código do ativo
@@ -323,7 +359,7 @@ class DataManager:
         Returns:
             Dicionário com informações
         """
-        ticker_normalizado = self._normalize_ticker(ticker)
+        ticker_limpo = self._clean_ticker(ticker)
         
         info = {
             'ticker': ticker,
@@ -333,56 +369,49 @@ class DataManager:
         }
         
         try:
-            stock = yf.Ticker(ticker_normalizado)
-            stock_info = stock.info
+            url = f"{self.base_url}/quote/{ticker_limpo}"
+            response = self.session.get(url, timeout=self.timeout)
             
-            if stock_info:
-                info['nome'] = (
-                    stock_info.get('longName') or 
-                    stock_info.get('shortName') or 
-                    ticker
-                )
-                info['preco'] = (
-                    stock_info.get('currentPrice') or 
-                    stock_info.get('regularMarketPrice')
-                )
-        except Exception as e:
-            logger.debug(f"Erro ao buscar info de {ticker}: {e}")
+            if response.status_code == 200:
+                data = response.json()
+                
+                if data.get('results') and len(data['results']) > 0:
+                    result = data['results'][0]
+                    
+                    info['nome'] = result.get('longName') or result.get('shortName') or ticker
+                    info['preco'] = result.get('regularMarketPrice')
+                    info['tipo'] = result.get('type', 'ACAO')
         
-        # Buscar preço separadamente se necessário
-        if not info['preco']:
-            info['preco'] = self.obter_preco_atual(ticker)
+        except Exception as e:
+            logger.error(f"Erro ao buscar info de {ticker}: {str(e)}")
         
         return info
     
     # ==========================================
-    # TESTE DE CONEXÃO
+    # TESTE
     # ==========================================
     
     def testar_conexao(self) -> Dict[str, bool]:
-        """
-        Testa conectividade com Yahoo Finance
+        """Testa conexão com BRAPI"""
+        logger.info("Testando BRAPI...")
         
-        Returns:
-            Dicionário com status
-        """
-        logger.info("Testando conexão com Yahoo Finance...")
-        
-        resultado = {'yahoo_finance': False}
+        resultado = {'brapi': False}
         
         try:
-            # Testar com PETR4
-            stock = yf.Ticker('PETR4.SA')
-            hist = stock.history(period='5d')
+            url = f"{self.base_url}/quote/PETR4"
+            response = self.session.get(url, timeout=self.timeout)
             
-            if not hist.empty:
-                resultado['yahoo_finance'] = True
-                logger.info("✓ Yahoo Finance: OK")
-            else:
-                logger.error("✗ Yahoo Finance: sem dados")
-                
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('results'):
+                    resultado['brapi'] = True
+                    logger.info("✓ BRAPI: OK")
+                    return resultado
+            
+            logger.error("✗ BRAPI: sem dados")
+            
         except Exception as e:
-            logger.error(f"✗ Yahoo Finance: erro - {str(e)}")
+            logger.error(f"✗ BRAPI: erro - {str(e)}")
         
         return resultado
 
@@ -395,78 +424,49 @@ _data_manager = DataManager()
 
 
 # ==========================================
-# FUNÇÕES PÚBLICAS (COMPATIBILIDADE)
+# FUNÇÕES PÚBLICAS
 # ==========================================
 
 def get_price_history(
-    tickers: List[str], 
-    start_date: datetime, 
+    tickers: List[str],
+    start_date: datetime,
     end_date: datetime,
     use_cache: bool = True
 ) -> pd.DataFrame:
-    """
-    Busca histórico de preços
-    
-    Args:
-        tickers: Lista de códigos de ativos
-        start_date: Data inicial
-        end_date: Data final
-        use_cache: Usar cache (ignorado)
-        
-    Returns:
-        DataFrame com histórico
-    """
+    """Busca histórico de preços"""
     return _data_manager.get_price_history(tickers, start_date, end_date, use_cache)
 
 
 def get_dividends(
-    ticker: str, 
+    ticker: str,
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None
 ) -> pd.DataFrame:
-    """
-    Busca dividendos
-    
-    Args:
-        ticker: Código do ativo
-        start_date: Data inicial
-        end_date: Data final
-        
-    Returns:
-        DataFrame com dividendos
-    """
+    """Busca dividendos"""
     return _data_manager.get_dividends(ticker, start_date, end_date)
 
 
 def get_current_prices(tickers: List[str]) -> Dict[str, Optional[float]]:
-    """
-    Busca preços atuais
-    
-    Args:
-        tickers: Lista de códigos
-        
-    Returns:
-        Dicionário {ticker: preço}
-    """
+    """Busca preços atuais"""
     return _data_manager.get_current_prices(tickers)
 
 
 def obter_preco_atual(ticker: str) -> Optional[float]:
-    """Busca preço atual de um ativo"""
+    """Busca preço atual"""
     return _data_manager.obter_preco_atual(ticker)
 
 
 def obter_informacoes_ativo(ticker: str) -> Dict[str, Any]:
-    """Busca informações de um ativo"""
+    """Busca informações"""
     return _data_manager.obter_informacoes_ativo(ticker)
 
 
 def testar_conexao() -> Dict[str, bool]:
-    """Testa conexão com APIs"""
+    """Testa conexão"""
     return _data_manager.testar_conexao()
 
 
-# Aliases adicionais
+# Aliases
 obter_preco = obter_preco_atual
 obter_info = obter_informacoes_ativo
 obter_dividendos = get_dividends
