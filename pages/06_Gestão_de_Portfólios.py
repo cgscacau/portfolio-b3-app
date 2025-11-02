@@ -487,7 +487,7 @@ with tab4:
 
 with tab5:
     st.subheader("🎯 Portfólio Otimizado vs Manual")
-    st.markdown("Compare seu portfólio manual com o portfólio otimizado pelo sistema")
+    st.markdown("Compare seu portfólio manual com portfólios otimizados")
     
     portfolios = listar_portfolios()
     
@@ -511,101 +511,162 @@ with tab5:
             st.markdown("---")
             st.markdown("### ⚙️ Configurações de Otimização")
             
+            # Verificar se existem portfólios otimizados da página 04
+            tem_otimizados = 'portfolios_otimizados' in st.session_state
+            
             col1, col2 = st.columns(2)
             
             with col1:
+                if tem_otimizados:
+                    usar_da_pagina_04 = st.checkbox(
+                        "✅ Usar portfólios da página 'Sharpe e MinVol'",
+                        value=True,
+                        help="Usar os portfólios já calculados na página 04"
+                    )
+                    
+                    if usar_da_pagina_04:
+                        opt_data = st.session_state.portfolios_otimizados
+                        st.success(f"📅 Calculados em: {opt_data['sharpe_maximo']['data_calculo'].strftime('%d/%m/%Y %H:%M')}")
+                else:
+                    usar_da_pagina_04 = False
+                    st.info("💡 Vá para 'Sharpe e MinVol' e clique em 'Calcular' primeiro")
+                
                 metodo_otimizacao = st.selectbox(
                     "Método de Otimização",
-                    ["Sharpe Máximo", "Mínima Volatilidade", "Retorno Máximo"],
+                    ["Sharpe Máximo", "Mínima Volatilidade"],
                     help="Escolha o critério de otimização"
                 )
             
             with col2:
-                usar_mesmos_ativos = st.checkbox(
-                    "Usar mesmos ativos do portfólio manual",
-                    value=True,
-                    help="Se marcado, otimiza apenas redistribuindo os pesos"
-                )
-            
-            if st.button("🚀 Calcular Portfólio Otimizado", type="primary", use_container_width=True):
-                
-                with st.spinner("🔄 Calculando portfólio otimizado..."):
-                    
-                    df_precos = get_price_history(
-                        portfolio_manual.tickers,
-                        portfolio_manual.data_inicio,
-                        portfolio_manual.data_fim
-                    )
-                    
-                    if df_precos.empty:
-                        st.error("❌ Não foi possível obter dados históricos")
+                if tem_otimizados and usar_da_pagina_04:
+                    # Mostrar ativos do portfólio otimizado
+                    if metodo_otimizacao == "Sharpe Máximo":
+                        dados_opt = st.session_state.portfolios_otimizados['sharpe_maximo']
                     else:
-                        df_retornos = df_precos.pct_change().dropna()
-                        retornos_medios = df_retornos.mean()
-                        matriz_cov = df_retornos.cov()
+                        dados_opt = st.session_state.portfolios_otimizados['minima_volatilidade']
+                    
+                    st.info(f"📊 Ativos otimizados: {len(dados_opt['tickers'])}")
+                    
+                    # Verificar compatibilidade
+                    ativos_manual = set(portfolio_manual.tickers)
+                    ativos_otimizado = set(dados_opt['tickers'])
+                    
+                    if ativos_manual != ativos_otimizado:
+                        st.warning("⚠️ Ativos diferentes!")
+                        with st.expander("Ver diferenças"):
+                            st.write(f"**Manual:** {', '.join(sorted(ativos_manual))}")
+                            st.write(f"**Otimizado:** {', '.join(sorted(ativos_otimizado))}")
+            
+            # Processar otimização
+            if tem_otimizados and usar_da_pagina_04:
+                # Usar portfólio da página 04
+                if metodo_otimizacao == "Sharpe Máximo":
+                    dados_otimizados = st.session_state.portfolios_otimizados['sharpe_maximo']
+                else:
+                    dados_otimizados = st.session_state.portfolios_otimizados['minima_volatilidade']
+                
+                # Verificar compatibilidade de ativos
+                ativos_manual = set(portfolio_manual.tickers)
+                ativos_otimizado = set(dados_otimizados['tickers'])
+                
+                if ativos_manual == ativos_otimizado:
+                    # Ativos compatíveis - usar diretamente
+                    st.session_state.portfolio_otimizado = {
+                        'tickers': dados_otimizados['tickers'],
+                        'pesos': dados_otimizados['pesos'],
+                        'metodo': metodo_otimizacao,
+                        'data_calculo': dados_otimizados['data_calculo'],
+                        'portfolio_base': portfolio_manual_nome,
+                        'origem': 'pagina_04'
+                    }
+                    
+                    st.success("✅ Usando portfólio otimizado da página Sharpe e MinVol!")
+                
+                else:
+                    # Ativos incompatíveis
+                    st.warning("⚠️ Os ativos são diferentes. Clique abaixo para recalcular:")
+                    
+                    if st.button("🔄 Recalcular com ativos do manual", type="primary", use_container_width=True):
+                        usar_da_pagina_04 = False
+                        # Vai cair no else abaixo para recalcular
+            
+            if not tem_otimizados or not usar_da_pagina_04:
+                # Calcular novo portfólio
+                if st.button("🚀 Calcular Portfólio Otimizado", type="primary", use_container_width=True):
+                    
+                    with st.spinner("🔄 Calculando portfólio otimizado..."):
                         
-                        num_ativos = len(portfolio_manual.tickers)
-                        
-                        def portfolio_stats(pesos, retornos, cov_matrix):
-                            retorno = np.dot(pesos, retornos) * 252
-                            volatilidade = np.sqrt(np.dot(pesos.T, np.dot(cov_matrix * 252, pesos)))
-                            sharpe = retorno / volatilidade if volatilidade > 0 else 0
-                            return retorno, volatilidade, sharpe
-                        
-                        def objetivo_sharpe(pesos, retornos, cov_matrix):
-                            _, _, sharpe = portfolio_stats(pesos, retornos, cov_matrix)
-                            return -sharpe
-                        
-                        def objetivo_volatilidade(pesos, retornos, cov_matrix):
-                            _, volatilidade, _ = portfolio_stats(pesos, retornos, cov_matrix)
-                            return volatilidade
-                        
-                        def objetivo_retorno(pesos, retornos, cov_matrix):
-                            retorno, _, _ = portfolio_stats(pesos, retornos, cov_matrix)
-                            return -retorno
-                        
-                        restricoes = [{'type': 'eq', 'fun': lambda x: np.sum(x) - 1}]
-                        bounds = tuple((0, 1) for _ in range(num_ativos))
-                        pesos_iniciais = np.array([1.0 / num_ativos] * num_ativos)
-                        
-                        if metodo_otimizacao == "Sharpe Máximo":
-                            objetivo = objetivo_sharpe
-                        elif metodo_otimizacao == "Mínima Volatilidade":
-                            objetivo = objetivo_volatilidade
-                        else:
-                            objetivo = objetivo_retorno
-                        
-                        resultado = minimize(
-                            objetivo,
-                            pesos_iniciais,
-                            args=(retornos_medios, matriz_cov),
-                            method='SLSQP',
-                            bounds=bounds,
-                            constraints=restricoes
+                        df_precos = get_price_history(
+                            portfolio_manual.tickers,
+                            portfolio_manual.data_inicio,
+                            portfolio_manual.data_fim
                         )
                         
-                        if not resultado.success:
-                            st.error("❌ Falha na otimização")
+                        if df_precos.empty:
+                            st.error("❌ Não foi possível obter dados históricos")
                         else:
-                            pesos_otimizados = resultado.x
+                            df_retornos = df_precos.pct_change().dropna()
+                            retornos_medios = df_retornos.mean()
+                            matriz_cov = df_retornos.cov()
                             
-                            st.session_state.portfolio_otimizado = {
-                                'tickers': portfolio_manual.tickers,
-                                'pesos': pesos_otimizados.tolist(),
-                                'metodo': metodo_otimizacao,
-                                'data_calculo': datetime.now(),
-                                'portfolio_base': portfolio_manual_nome
-                            }
+                            num_ativos = len(portfolio_manual.tickers)
                             
-                            st.success("✅ Portfólio otimizado calculado com sucesso!")
-                            st.rerun()
+                            def portfolio_stats(pesos, retornos, cov_matrix):
+                                retorno = np.dot(pesos, retornos) * 252
+                                volatilidade = np.sqrt(np.dot(pesos.T, np.dot(cov_matrix * 252, pesos)))
+                                sharpe = retorno / volatilidade if volatilidade > 0 else 0
+                                return retorno, volatilidade, sharpe
+                            
+                            def objetivo_sharpe(pesos, retornos, cov_matrix):
+                                _, _, sharpe = portfolio_stats(pesos, retornos, cov_matrix)
+                                return -sharpe
+                            
+                            def objetivo_volatilidade(pesos, retornos, cov_matrix):
+                                _, volatilidade, _ = portfolio_stats(pesos, retornos, cov_matrix)
+                                return volatilidade
+                            
+                            restricoes = [{'type': 'eq', 'fun': lambda x: np.sum(x) - 1}]
+                            bounds = tuple((0, 1) for _ in range(num_ativos))
+                            pesos_iniciais = np.array([1.0 / num_ativos] * num_ativos)
+                            
+                            if metodo_otimizacao == "Sharpe Máximo":
+                                objetivo = objetivo_sharpe
+                            else:
+                                objetivo = objetivo_volatilidade
+                            
+                            resultado = minimize(
+                                objetivo,
+                                pesos_iniciais,
+                                args=(retornos_medios, matriz_cov),
+                                method='SLSQP',
+                                bounds=bounds,
+                                constraints=restricoes
+                            )
+                            
+                            if not resultado.success:
+                                st.error("❌ Falha na otimização")
+                            else:
+                                pesos_otimizados = resultado.x
+                                
+                                st.session_state.portfolio_otimizado = {
+                                    'tickers': portfolio_manual.tickers,
+                                    'pesos': pesos_otimizados.tolist(),
+                                    'metodo': metodo_otimizacao,
+                                    'data_calculo': datetime.now(),
+                                    'portfolio_base': portfolio_manual_nome,
+                                    'origem': 'calculado_aqui'
+                                }
+                                
+                                st.success("✅ Portfólio otimizado calculado com sucesso!")
+                                st.rerun()
             
             # Mostrar comparação se já foi calculado
             if 'portfolio_otimizado' in st.session_state:
                 
-                # Verificar se o portfólio otimizado é do portfólio manual atual
+                # Verificar se é do portfólio manual atual
                 if st.session_state.portfolio_otimizado.get('portfolio_base') != portfolio_manual_nome:
-                    st.warning("⚠️ O portfólio otimizado foi calculado para outro portfólio. Clique em 'Calcular Portfólio Otimizado' novamente.")
+                    st.warning("⚠️ O portfólio otimizado foi calculado para outro portfólio. Recalcule acima.")
+                
                 else:
                     
                     st.markdown("---")
@@ -613,6 +674,12 @@ with tab5:
                     
                     pesos_otimizados = st.session_state.portfolio_otimizado['pesos']
                     metodo = st.session_state.portfolio_otimizado['metodo']
+                    origem = st.session_state.portfolio_otimizado.get('origem', 'desconhecida')
+                    
+                    if origem == 'pagina_04':
+                        st.info("📌 Usando portfólio otimizado da página 'Sharpe e MinVol'")
+                    else:
+                        st.info("📌 Portfólio otimizado calculado nesta página")
                     
                     df_precos = get_price_history(
                         portfolio_manual.tickers,
@@ -784,7 +851,7 @@ with tab5:
                                 sucesso = criar_portfolio(
                                     nome=nome_otimizado,
                                     tickers=portfolio_manual.tickers,
-                                    pesos=pesos_otimizados.tolist(),
+                                    pesos=pesos_otimizados,
                                     data_inicio=portfolio_manual.data_inicio,
                                     data_fim=portfolio_manual.data_fim,
                                     descricao=f"Versão otimizada de '{portfolio_manual.nome}' usando {metodo}"
@@ -802,4 +869,4 @@ with tab5:
 # ==========================================
 
 st.markdown("---")
-st.markdown("💡 **Dica:** Use a aba 'Otimizado vs Manual' para melhorar seu portfólio!")
+st.markdown("💡 **Dica:** Calcule os portfólios otimizados na página 'Sharpe e MinVol' primeiro, depois compare aqui!")
