@@ -34,12 +34,16 @@ def obter_dados_ohlc_completos(ticker, data_inicio, data_fim):
                 if ticker in df_original.columns.get_level_values(0):
                     df_ticker = df_original[ticker]
                     if all(col in df_ticker.columns for col in ['Open', 'High', 'Low', 'Close']):
-                        return df_ticker[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
+                        df_result = df_ticker[['Open', 'High', 'Low', 'Close']].copy()
+                        df_result['Volume'] = df_ticker.get('Volume', 1000000)
+                        return df_result.dropna()
             
             elif all(col in df_original.columns for col in ['Open', 'High', 'Low', 'Close']):
-                return df_original[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
-    except:
-        pass
+                df_result = df_original[['Open', 'High', 'Low', 'Close']].copy()
+                df_result['Volume'] = df_original.get('Volume', 1000000)
+                return df_result.dropna()
+    except Exception as e:
+        st.warning(f"Erro ao obter dados via core.data para {ticker}: {str(e)}")
     
     # Fallback: yfinance para dados OHLC reais
     try:
@@ -56,9 +60,9 @@ def obter_dados_ohlc_completos(ticker, data_inicio, data_fim):
             return df_yf[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
     
     except ImportError:
-        st.warning("Para dados OHLC reais, instale: pip install yfinance")
-    except:
-        pass
+        st.info("💡 Para dados OHLC reais, instale: pip install yfinance")
+    except Exception as e:
+        st.warning(f"Erro yfinance para {ticker}: {str(e)}")
     
     # Último recurso: criar OHLC aproximado do preço de fechamento
     try:
@@ -67,12 +71,21 @@ def obter_dados_ohlc_completos(ticker, data_inicio, data_fim):
             precos = df[ticker].dropna()
             
             # Criar variação artificial baseada em volatilidade histórica
-            volatilidade = precos.pct_change().std() * 0.5
+            volatilidade = precos.pct_change().std()
+            if pd.isna(volatilidade) or volatilidade == 0:
+                volatilidade = 0.02  # 2% padrão
+            
+            # Limitar volatilidade artificial
+            volatilidade = min(volatilidade * 0.3, 0.05)  # Máximo 5%
+            
+            np.random.seed(42)  # Para consistência
+            high_mult = 1 + np.random.uniform(0, volatilidade, len(precos))
+            low_mult = 1 - np.random.uniform(0, volatilidade, len(precos))
             
             df_ohlc = pd.DataFrame({
                 'Open': precos.shift(1).fillna(precos),
-                'High': precos * (1 + np.random.uniform(0, volatilidade, len(precos))),
-                'Low': precos * (1 - np.random.uniform(0, volatilidade, len(precos))),
+                'High': precos * high_mult,
+                'Low': precos * low_mult,
                 'Close': precos,
                 'Volume': 1000000
             }, index=precos.index)
@@ -82,8 +95,8 @@ def obter_dados_ohlc_completos(ticker, data_inicio, data_fim):
             df_ohlc['Low'] = df_ohlc[['Low', 'Open', 'Close']].min(axis=1)
             
             return df_ohlc.dropna()
-    except:
-        pass
+    except Exception as e:
+        st.error(f"Erro ao criar dados OHLC para {ticker}: {str(e)}")
     
     return pd.DataFrame()
 
@@ -111,7 +124,7 @@ def carregar_base_ativos():
     
     except Exception as e:
         st.error(f"Erro ao carregar base de ativos: {str(e)}")
-        return ["PETR4", "VALE3", "ITUB4", "BBDC4", "ABEV3"]
+        return ["PETR4", "VALE3", "ITUB4", "BBDC4", "ABEV3", "BBAS3", "WEGE3", "MGLU3"]
 
 
 # ==========================================
@@ -137,13 +150,17 @@ def resample_para_semanal(df):
     if df.empty or len(df) < 5:
         return pd.DataFrame()
     
-    return df.resample('W').agg({
-        'Open': 'first',
-        'High': 'max',
-        'Low': 'min',
-        'Close': 'last',
-        'Volume': 'sum'
-    }).dropna()
+    try:
+        return df.resample('W').agg({
+            'Open': 'first',
+            'High': 'max',
+            'Low': 'min',
+            'Close': 'last',
+            'Volume': 'sum'
+        }).dropna()
+    except Exception as e:
+        st.error(f"Erro ao criar timeframe semanal: {str(e)}")
+        return pd.DataFrame()
 
 
 def detectar_convergencia_e_sinais(df_diario, df_semanal, lookback=5):
@@ -158,13 +175,18 @@ def detectar_convergencia_e_sinais(df_diario, df_semanal, lookback=5):
         """Encontra cruzamento mais recente dentro do lookback"""
         if df.empty or len(df) < 2:
             return None, None
+        
+        # Garantir que temos as colunas necessárias
+        if not all(col in df.columns for col in ['linha_media', 'ema_media']):
+            return None, None
             
         for i in range(1, min(lookback + 1, len(df))):
             try:
                 atual = df.iloc[-i]
                 anterior = df.iloc[-(i+1)]
                 
-                if pd.isna(atual['linha_media']) or pd.isna(atual['ema_media']):
+                if (pd.isna(atual['linha_media']) or pd.isna(atual['ema_media']) or
+                    pd.isna(anterior['linha_media']) or pd.isna(anterior['ema_media'])):
                     continue
                 
                 # Cruzamento para CIMA
@@ -176,7 +198,7 @@ def detectar_convergencia_e_sinais(df_diario, df_semanal, lookback=5):
                 if (anterior['linha_media'] >= anterior['ema_media'] and 
                     atual['linha_media'] < atual['ema_media']):
                     return 'VENDA', i
-            except:
+            except (IndexError, KeyError) as e:
                 continue
         
         return None, None
@@ -217,22 +239,26 @@ def detectar_convergencia_e_sinais(df_diario, df_semanal, lookback=5):
 
 def calcular_entrada_stop_alvo(df, direcao, rr_ratio=2.0):
     """Calcula ponto de entrada, stop loss e alvo"""
-    if df.empty:
+    if df.empty or not direcao:
         return {'entrada': 0, 'stop': 0, 'alvo': 0}
     
-    ultima_linha = df.iloc[-1]
-    entrada = ultima_linha['Close']
-    
-    if direcao == 'COMPRA':
-        stop = ultima_linha['linha_inferior']
-        distancia = entrada - stop
-        alvo = entrada + (distancia * rr_ratio)
-    else:
-        stop = ultima_linha['linha_superior']
-        distancia = stop - entrada
-        alvo = entrada - (distancia * rr_ratio)
-    
-    return {'entrada': entrada, 'stop': stop, 'alvo': alvo}
+    try:
+        ultima_linha = df.iloc[-1]
+        entrada = ultima_linha['Close']
+        
+        if direcao == 'COMPRA':
+            stop = ultima_linha['linha_inferior']
+            distancia = entrada - stop
+            alvo = entrada + (distancia * rr_ratio)
+        else:
+            stop = ultima_linha['linha_superior']
+            distancia = stop - entrada
+            alvo = entrada - (distancia * rr_ratio)
+        
+        return {'entrada': entrada, 'stop': stop, 'alvo': alvo}
+    except Exception as e:
+        st.error(f"Erro ao calcular pontos: {str(e)}")
+        return {'entrada': 0, 'stop': 0, 'alvo': 0}
 
 
 # ==========================================
@@ -242,113 +268,118 @@ def calcular_entrada_stop_alvo(df, direcao, rr_ratio=2.0):
 def criar_graficos_duplos(df_diario, df_semanal, ticker):
     """Cria gráficos lado a lado com candlesticks OHLC reais"""
     
-    df_d = df_diario.tail(100).dropna()
-    df_s = df_semanal.tail(50).dropna()
+    try:
+        df_d = df_diario.tail(100).dropna()
+        df_s = df_semanal.tail(50).dropna()
+        
+        if df_d.empty or df_s.empty:
+            return None
+        
+        # Subplots lado a lado
+        fig = make_subplots(
+            rows=1, cols=2,
+            subplot_titles=(f'{ticker} - Diário (100 barras)', f'{ticker} - Semanal (50 barras)'),
+            horizontal_spacing=0.08
+        )
+        
+        # GRÁFICO DIÁRIO
+        fig.add_trace(
+            go.Candlestick(
+                x=df_d.index,
+                open=df_d['Open'],
+                high=df_d['High'],
+                low=df_d['Low'],
+                close=df_d['Close'],
+                name='Preço Diário',
+                increasing_line_color='#26a69a',
+                decreasing_line_color='#ef5350',
+                showlegend=False
+            ),
+            row=1, col=1
+        )
+        
+        # Indicadores diário
+        indicadores = [
+            ('Superior', 'linha_superior', '#ff4444', 2),
+            ('Inferior', 'linha_inferior', '#00ff00', 2),
+            ('Média', 'linha_media', 'white', 2.5),
+            ('EMA', 'ema_media', '#ff9800', 2)
+        ]
+        
+        for nome, coluna, cor, largura in indicadores:
+            if coluna in df_d.columns and not df_d[coluna].isna().all():
+                fig.add_trace(
+                    go.Scatter(
+                        x=df_d.index, 
+                        y=df_d[coluna],
+                        mode='lines',
+                        name=f'{nome} D',
+                        line=dict(
+                            color=cor, 
+                            width=largura,
+                            dash='dash' if nome == 'EMA' else 'solid'
+                        ),
+                        showlegend=False
+                    ),
+                    row=1, col=1
+                )
+        
+        # GRÁFICO SEMANAL
+        fig.add_trace(
+            go.Candlestick(
+                x=df_s.index,
+                open=df_s['Open'],
+                high=df_s['High'],
+                low=df_s['Low'],
+                close=df_s['Close'],
+                name='Preço Semanal',
+                increasing_line_color='#26a69a',
+                decreasing_line_color='#ef5350',
+                showlegend=False
+            ),
+            row=1, col=2
+        )
+        
+        # Indicadores semanal
+        for nome, coluna, cor, largura in indicadores:
+            if coluna in df_s.columns and not df_s[coluna].isna().all():
+                fig.add_trace(
+                    go.Scatter(
+                        x=df_s.index, 
+                        y=df_s[coluna],
+                        mode='lines',
+                        name=f'{nome} S',
+                        line=dict(
+                            color=cor, 
+                            width=largura,
+                            dash='dash' if nome == 'EMA' else 'solid'
+                        ),
+                        showlegend=False
+                    ),
+                    row=1, col=2
+                )
+        
+        # Layout otimizado
+        fig.update_layout(
+            height=650,
+            template="plotly_dark",
+            margin=dict(l=60, r=60, t=100, b=60),
+            title={
+                'text': f"{ticker} - Cacau's Channel (Comparação Diário vs Semanal)",
+                'x': 0.5,
+                'xanchor': 'center',
+                'font': {'size': 16}
+            }
+        )
+        
+        # Remover rangesliders
+        fig.update_xaxes(rangeslider_visible=False)
+        
+        return fig
     
-    if df_d.empty or df_s.empty:
+    except Exception as e:
+        st.error(f"Erro ao criar gráficos: {str(e)}")
         return None
-    
-    # Subplots lado a lado
-    fig = make_subplots(
-        rows=1, cols=2,
-        subplot_titles=(f'{ticker} - Diário (100 barras)', f'{ticker} - Semanal (50 barras)'),
-        horizontal_spacing=0.08
-    )
-    
-    # GRÁFICO DIÁRIO
-    fig.add_trace(
-        go.Candlestick(
-            x=df_d.index,
-            open=df_d['Open'],
-            high=df_d['High'],
-            low=df_d['Low'],
-            close=df_d['Close'],
-            name='Preço Diário',
-            increasing_line_color='#26a69a',
-            decreasing_line_color='#ef5350',
-            showlegend=False
-        ),
-        row=1, col=1
-    )
-    
-    # Indicadores diário
-    indicadores = [
-        ('Superior', 'linha_superior', '#ff4444', 2),
-        ('Inferior', 'linha_inferior', '#00ff00', 2),
-        ('Média', 'linha_media', 'white', 2.5),
-        ('EMA', 'ema_media', '#ff9800', 2)
-    ]
-    
-    for nome, coluna, cor, largura in indicadores:
-        if coluna in df_d.columns:
-            fig.add_trace(
-                go.Scatter(
-                    x=df_d.index, 
-                    y=df_d[coluna],
-                    mode='lines',
-                    name=f'{nome} D',
-                    line=dict(
-                        color=cor, 
-                        width=largura,
-                        dash='dash' if nome == 'EMA' else 'solid'
-                    ),
-                    showlegend=False
-                ),
-                row=1, col=1
-            )
-    
-    # GRÁFICO SEMANAL
-    fig.add_trace(
-        go.Candlestick(
-            x=df_s.index,
-            open=df_s['Open'],
-            high=df_s['High'],
-            low=df_s['Low'],
-            close=df_s['Close'],
-            name='Preço Semanal',
-            increasing_line_color='#26a69a',
-            decreasing_line_color='#ef5350',
-            showlegend=False
-        ),
-        row=1, col=2
-    )
-    
-    # Indicadores semanal
-    for nome, coluna, cor, largura in indicadores:
-        if coluna in df_s.columns:
-            fig.add_trace(
-                go.Scatter(
-                    x=df_s.index, 
-                    y=df_s[coluna],
-                    mode='lines',
-                    name=f'{nome} S',
-                    line=dict(
-                        color=cor, 
-                        width=largura,
-                        dash='dash' if nome == 'EMA' else 'solid'
-                    ),
-                    showlegend=False
-                ),
-                row=1, col=2
-            )
-    
-    # Layout otimizado
-    fig.update_layout(
-        height=650,
-        template="plotly_dark",
-        margin=dict(l=60, r=60, t=100, b=60),
-        title={
-            'text': f"{ticker} - Cacau's Channel (Comparação Diário vs Semanal)",
-            'x': 0.5,
-            'xanchor': 'center',
-            'font': {'size': 16}
-        }
-    )
-    
-    # Remover rangesliders
-    fig.update_xaxes(rangeslider_visible=False)
-    
-    return fig
 
 
 # ==========================================
@@ -357,6 +388,14 @@ def criar_graficos_duplos(df_diario, df_semanal, ticker):
 
 st.title("🎯 Cacau's Channel - Screener Multi-Timeframe")
 st.markdown("**CONVERGÊNCIA** = Cruzamentos alinhados | **SINAL** = Convergência + Gatilho ativo")
+
+# Botão para limpar cache/session_state
+if st.button("🔄 Limpar Dados", help="Remove dados antigos do cache"):
+    for key in list(st.session_state.keys()):
+        if key.startswith('cacaus_'):
+            del st.session_state[key]
+    st.success("✅ Dados limpos!")
+    st.rerun()
 
 try:
     cache_manager.exibir_painel_controle()
@@ -446,8 +485,8 @@ with col_esquerda:
                 st.caption(f"📊 {len(tickers)} ativos no portfólio")
             else:
                 st.warning("Nenhum portfólio encontrado")
-        except:
-            st.error("Erro ao carregar portfólios")
+        except Exception as e:
+            st.error(f"Erro ao carregar portfólios: {str(e)}")
     
     # OPÇÃO 2: Base B3
     elif opcao_selecao == "🌐 Base B3":
@@ -467,19 +506,22 @@ with col_esquerda:
                 step=5
             )
             
-            tickers_filtrados = []
-            
-            if "Ações" in filtro_tipo:
-                tickers_filtrados.extend([t for t in base_completa if t[-1] in ['3', '4'] and not t.endswith('11')])
-            
-            if "FIIs" in filtro_tipo:
-                tickers_filtrados.extend([t for t in base_completa if t.endswith('11')])
-            
-            if "ETFs" in filtro_tipo:
-                tickers_filtrados.extend([t for t in base_completa if 'B' in t[-2:] and not t[-1].isdigit()])
-            
-            tickers = sorted(list(set(tickers_filtrados)))[:limite_ativos]
-            st.caption(f"📊 {len(tickers)} ativos selecionados")
+            if filtro_tipo:
+                tickers_filtrados = []
+                
+                if "Ações" in filtro_tipo:
+                    tickers_filtrados.extend([t for t in base_completa if t[-1] in ['3', '4'] and not t.endswith('11')])
+                
+                if "FIIs" in filtro_tipo:
+                    tickers_filtrados.extend([t for t in base_completa if t.endswith('11')])
+                
+                if "ETFs" in filtro_tipo:
+                    tickers_filtrados.extend([t for t in base_completa if 'B' in t[-2:] and not t[-1].isdigit()])
+                
+                tickers = sorted(list(set(tickers_filtrados)))[:limite_ativos]
+                st.caption(f"📊 {len(tickers)} ativos selecionados")
+            else:
+                st.warning("Selecione pelo menos um tipo de ativo")
     
     # OPÇÃO 3: Manual
     else:
@@ -489,106 +531,115 @@ with col_esquerda:
             height=120
         )
         
-        tickers_raw = tickers_input.replace(',', '\n').split('\n')
-        tickers = [t.strip().upper() for t in tickers_raw if t.strip()]
-        
-        st.caption(f"📊 {len(tickers)} ativos listados")
+        if tickers_input.strip():
+            tickers_raw = tickers_input.replace(',', '\n').split('\n')
+            tickers = [t.strip().upper() for t in tickers_raw if t.strip()]
+            st.caption(f"📊 {len(tickers)} ativos listados")
+        else:
+            st.warning("Digite pelo menos um ticker")
     
     # SCREENER
     st.markdown("---")
     
-    if st.button("🔍 Executar Screener", type="primary", use_container_width=True):
+    if st.button("🔍 Executar Screener", type="primary", use_container_width=True, disabled=not tickers):
         
-        if not tickers:
-            st.error("❌ Nenhum ativo selecionado")
-        else:
-            convergencias = []
-            sinais = []
-            todos_dados = {}
+        convergencias = []
+        sinais = []
+        todos_dados = {}
+        erros = []
+        
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        total_analisados = 0
+        total_com_dados = 0
+        
+        for idx, ticker in enumerate(tickers):
             
-            progress_bar = st.progress(0)
-            status_text = st.empty()
+            progress = (idx + 1) / len(tickers)
+            progress_bar.progress(progress)
+            status_text.text(f"Analisando {ticker}... ({idx+1}/{len(tickers)})")
             
-            total_analisados = 0
-            total_com_dados = 0
+            total_analisados += 1
             
-            for idx, ticker in enumerate(tickers):
+            try:
+                # Obter dados OHLC reais
+                df_ohlc = obter_dados_ohlc_completos(ticker, data_inicio, data_fim_dt)
                 
-                progress = (idx + 1) / len(tickers)
-                progress_bar.progress(progress)
-                status_text.text(f"Analisando {ticker}... ({idx+1}/{len(tickers)})")
+                if df_ohlc.empty or len(df_ohlc) < 60:
+                    erros.append(f"{ticker}: Dados insuficientes")
+                    continue
                 
-                total_analisados += 1
+                total_com_dados += 1
                 
-                try:
-                    # Obter dados OHLC reais
-                    df_ohlc = obter_dados_ohlc_completos(ticker, data_inicio, data_fim_dt)
+                # Calcular indicadores
+                df_diario = calcular_cacaus_channel(df_ohlc, periodo_superior, periodo_inferior, ema_periodo)
+                df_semanal_raw = resample_para_semanal(df_ohlc)
+                
+                if df_semanal_raw.empty:
+                    erros.append(f"{ticker}: Erro no timeframe semanal")
+                    continue
+                
+                df_semanal = calcular_cacaus_channel(df_semanal_raw, periodo_superior, periodo_inferior, ema_periodo)
+                
+                # Detectar convergência e sinais
+                analise = detectar_convergencia_e_sinais(df_diario, df_semanal, lookback_cruzamento)
+                
+                # Salvar todos os dados com estrutura consistente
+                todos_dados[ticker] = {
+                    'df_diario': df_diario,
+                    'df_semanal': df_semanal,
+                    'analise': analise  # Chave consistente
+                }
+                
+                # Processar convergências e sinais
+                if analise['tem_convergencia']:
+                    pontos = calcular_entrada_stop_alvo(df_diario, analise['direcao'], rr_ratio)
                     
-                    if df_ohlc.empty or len(df_ohlc) < 60:
-                        continue
-                    
-                    total_com_dados += 1
-                    
-                    # Calcular indicadores
-                    df_diario = calcular_cacaus_channel(df_ohlc, periodo_superior, periodo_inferior, ema_periodo)
-                    df_semanal_raw = resample_para_semanal(df_ohlc)
-                    
-                    if df_semanal_raw.empty:
-                        continue
-                    
-                    df_semanal = calcular_cacaus_channel(df_semanal_raw, periodo_superior, periodo_inferior, ema_periodo)
-                    
-                    # Detectar convergência e sinais
-                    analise = detectar_convergencia_e_sinais(df_diario, df_semanal, lookback_cruzamento)
-                    
-                    # Salvar todos os dados
-                    todos_dados[ticker] = {
-                        'df_diario': df_diario,
-                        'df_semanal': df_semanal,
-                        'analise': analise
+                    item = {
+                        'ticker': ticker,
+                        'direcao': analise['direcao'],
+                        'tipo': analise['tipo'],
+                        'entrada': pontos['entrada'],
+                        'stop': pontos['stop'],
+                        'alvo': pontos['alvo']
                     }
                     
-                    # Processar convergências e sinais
-                    if analise['tem_convergencia']:
-                        pontos = calcular_entrada_stop_alvo(df_diario, analise['direcao'], rr_ratio)
-                        
-                        item = {
-                            'ticker': ticker,
-                            'direcao': analise['direcao'],
-                            'tipo': analise['tipo'],
-                            'entrada': pontos['entrada'],
-                            'stop': pontos['stop'],
-                            'alvo': pontos['alvo']
-                        }
-                        
-                        convergencias.append(item)
-                        
-                        if analise['tem_sinal']:
-                            sinais.append(item)
-                
-                except Exception as e:
-                    continue
+                    convergencias.append(item)
+                    
+                    if analise['tem_sinal']:
+                        sinais.append(item)
             
-            progress_bar.empty()
-            status_text.empty()
-            
-            # Salvar resultados
-            st.session_state.cacaus_convergencias = convergencias
-            st.session_state.cacaus_sinais = sinais
-            st.session_state.cacaus_todos_dados = todos_dados
-            
-            # Estatísticas
-            st.metric("📊 Analisados", total_analisados)
-            st.metric("✅ Com Dados", total_com_dados)
-            st.metric("🔄 Convergências", len(convergencias))
-            st.metric("🎯 Sinais", len(sinais))
-            
-            if sinais:
-                st.success(f"🎯 {len(sinais)} sinal(is) ativo(s) encontrado(s)!")
-            elif convergencias:
-                st.info(f"🔄 {len(convergencias)} convergência(s) encontrada(s)")
-            else:
-                st.warning("Nenhuma oportunidade encontrada")
+            except Exception as e:
+                erros.append(f"{ticker}: {str(e)}")
+                continue
+        
+        progress_bar.empty()
+        status_text.empty()
+        
+        # Salvar resultados
+        st.session_state.cacaus_convergencias = convergencias
+        st.session_state.cacaus_sinais = sinais
+        st.session_state.cacaus_todos_dados = todos_dados
+        
+        # Estatísticas
+        st.metric("📊 Analisados", total_analisados)
+        st.metric("✅ Com Dados", total_com_dados)
+        st.metric("🔄 Convergências", len(convergencias))
+        st.metric("🎯 Sinais", len(sinais))
+        
+        if sinais:
+            st.success(f"🎯 {len(sinais)} sinal(is) ativo(s) encontrado(s)!")
+        elif convergencias:
+            st.info(f"🔄 {len(convergencias)} convergência(s) encontrada(s)")
+        else:
+            st.warning("Nenhuma oportunidade encontrada")
+        
+        # Mostrar erros se houver poucos
+        if erros and len(erros) <= 5:
+            with st.expander(f"⚠️ {len(erros)} erro(s)"):
+                for erro in erros:
+                    st.caption(erro)
     
     # LISTAS DE RESULTADOS
     st.markdown("---")
@@ -643,7 +694,39 @@ with col_direita:
         )
         
         dados_ativo = st.session_state.cacaus_todos_dados[ativo_selecionado]
-        analise = dados_ativo['analise']
+        
+        # TRATAMENTO ROBUSTO PARA ACESSAR ANÁLISE
+        analise = None
+        if 'analise' in dados_ativo:
+            analise = dados_ativo['analise']
+        elif 'convergencia' in dados_ativo:  # Fallback para estrutura antiga
+            conv = dados_ativo['convergencia']
+            # Converter estrutura antiga para nova
+            analise = {
+                'tem_convergencia': conv.get('convergente', False),
+                'tem_sinal': conv.get('convergente', False) and (
+                    conv.get('barra_cruzamento_diario') == 1 or 
+                    conv.get('barra_cruzamento_semanal') == 1
+                ),
+                'direcao': conv.get('direcao'),
+                'tipo': conv.get('tipo_sinal', 'RECENTE'),
+                'cruz_diario': conv.get('cruzamento_diario'),
+                'cruz_semanal': conv.get('cruzamento_semanal'),
+                'barras_diario': conv.get('barra_cruzamento_diario'),
+                'barras_semanal': conv.get('barra_cruzamento_semanal')
+            }
+        else:
+            # Estrutura padrão se não encontrar dados
+            analise = {
+                'tem_convergencia': False,
+                'tem_sinal': False,
+                'direcao': None,
+                'tipo': None,
+                'cruz_diario': None,
+                'cruz_semanal': None,
+                'barras_diario': None,
+                'barras_semanal': None
+            }
         
         # STATUS DO ATIVO
         col1, col2, col3 = st.columns(3)
@@ -659,28 +742,31 @@ with col_direita:
         with col2:
             if analise['cruz_diario']:
                 cor = "🟢" if analise['cruz_diario'] == 'COMPRA' else "🔴"
-                st.write(f"📅 Diário: {cor} {analise['cruz_diario']} ({analise['barras_diario']})")
+                barras_info = f" ({analise['barras_diario']})" if analise['barras_diario'] else ""
+                st.write(f"📅 Diário: {cor} {analise['cruz_diario']}{barras_info}")
             else:
                 st.write("📅 Diário: Sem cruzamento")
         
         with col3:
             if analise['cruz_semanal']:
                 cor = "🟢" if analise['cruz_semanal'] == 'COMPRA' else "🔴"
-                st.write(f"📆 Semanal: {cor} {analise['cruz_semanal']} ({analise['barras_semanal']})")
+                barras_info = f" ({analise['barras_semanal']})" if analise['barras_semanal'] else ""
+                st.write(f"📆 Semanal: {cor} {analise['cruz_semanal']}{barras_info}")
             else:
                 st.write("📆 Semanal: Sem cruzamento")
         
         # PONTOS DE OPERAÇÃO
-        if analise['tem_convergencia']:
+        if analise['tem_convergencia'] and analise['direcao']:
             pontos = calcular_entrada_stop_alvo(dados_ativo['df_diario'], analise['direcao'], rr_ratio)
             
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("💰 Entrada", f"R$ {pontos['entrada']:.2f}")
-            col2.metric("🛑 Stop", f"R$ {pontos['stop']:.2f}")
-            col3.metric("🎯 Alvo", f"R$ {pontos['alvo']:.2f}")
-            
-            risco_pct = abs(pontos['entrada'] - pontos['stop']) / pontos['entrada'] * 100
-            col4.metric("📊 Risco", f"{risco_pct:.1f}%")
+            if pontos['entrada'] > 0:
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("💰 Entrada", f"R$ {pontos['entrada']:.2f}")
+                col2.metric("🛑 Stop", f"R$ {pontos['stop']:.2f}")
+                col3.metric("🎯 Alvo", f"R$ {pontos['alvo']:.2f}")
+                
+                risco_pct = abs(pontos['entrada'] - pontos['stop']) / pontos['entrada'] * 100
+                col4.metric("📊 Risco", f"{risco_pct:.1f}%")
         
         # GRÁFICOS DUPLOS
         st.markdown("---")
@@ -689,7 +775,7 @@ with col_direita:
         if fig:
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.error("Erro ao gerar gráficos")
+            st.error("Erro ao gerar gráficos - verifique se há dados suficientes")
     
     else:
         st.info("👈 Execute o screener na barra lateral para visualizar análises")
