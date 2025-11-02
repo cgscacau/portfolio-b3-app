@@ -263,38 +263,46 @@ class CacheManager:
             'newest': datetime.now()
         }
     
-def exibir_painel_controle(self):
-    """Exibe painel de controle do cache no Streamlit"""
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("⚡ Cache")
-    
-    info = self.obter_info()
-    stats = info['stats']
-    
-    # Estatísticas
-    col1, col2 = st.sidebar.columns(2)
-    with col1:
-        st.metric("Hits", stats['hits'])
-    with col2:
-        st.metric("Misses", stats['misses'])
-    
-    st.sidebar.metric("Taxa de Acerto", f"{stats['hit_rate']:.1f}%")
-    st.sidebar.metric("Requisições", stats['data_requests'])
-    
-    # Botões de controle
-    if st.sidebar.button("🗑️ Limpar Cache", use_container_width=True, key="limpar_cache_btn"):
-        # Limpar cache do Streamlit
-        st.cache_data.clear()
-        st.cache_resource.clear()
+    def exibir_painel_controle(self):
+        """Exibe painel de controle do cache no Streamlit"""
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("⚡ Cache")
         
-        # Resetar estatísticas
-        self.stats.resetar()
+        info = self.obter_info()
+        stats = info['stats']
         
-        # Mensagem de sucesso
-        st.sidebar.success("✅ Cache limpo!")
+        # Estatísticas
+        col1, col2 = st.sidebar.columns(2)
+        with col1:
+            st.metric("Hits", stats['hits'])
+        with col2:
+            st.metric("Misses", stats['misses'])
         
-        # Forçar recarregamento
-        st.rerun()
+        st.sidebar.metric("Taxa de Acerto", f"{stats['hit_rate']:.1f}%")
+        st.sidebar.metric("Requisições", stats['data_requests'])
+        
+        # Botão de limpar cache
+        if st.sidebar.button("🗑️ Limpar Cache", use_container_width=True, key="btn_limpar_cache_sidebar"):
+            try:
+                # Limpar cache do Streamlit
+                st.cache_data.clear()
+                st.cache_resource.clear()
+                
+                # Resetar estatísticas
+                self.stats.resetar()
+                
+                # Mensagem de sucesso
+                st.sidebar.success("✅ Cache limpo!")
+                
+                # Aguardar um pouco antes de recarregar
+                import time
+                time.sleep(0.5)
+                
+                # Forçar recarregamento
+                st.rerun()
+            except Exception as e:
+                st.sidebar.error(f"❌ Erro ao limpar: {str(e)}")
+
 
 
 
