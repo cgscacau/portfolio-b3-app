@@ -302,6 +302,21 @@ class DataManager:
         logger.warning(f"⚠ Nenhum dividendo encontrado para {ticker}")
         return pd.DataFrame(columns=['data', 'valor'])
     
+    def get_dividends(self, ticker: str, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None) -> pd.DataFrame:
+        """
+        Busca dividendos para compatibilidade com código existente
+        Alias para obter_dividendos com suporte a end_date
+        
+        Args:
+            ticker: Código do ativo
+            start_date: Data inicial
+            end_date: Data final (ignorado por enquanto)
+            
+        Returns:
+            DataFrame com dividendos
+        """
+        return self.obter_dividendos(ticker, start_date)
+    
     # ==========================================
     # FUNÇÕES DE BUSCA DE HISTÓRICO
     # ==========================================
@@ -336,6 +351,52 @@ class DataManager:
         logger.warning(f"⚠ Nenhum histórico encontrado para {ticker}")
         return pd.DataFrame()
     
+    def get_price_history(self, tickers: List[str], start_date: datetime, end_date: datetime) -> pd.DataFrame:
+        """
+        Busca histórico de preços para múltiplos ativos
+        Função para compatibilidade com código existente
+        
+        Args:
+            tickers: Lista de códigos de ativos
+            start_date: Data inicial
+            end_date: Data final
+            
+        Returns:
+            DataFrame com histórico de preços (índice: data, colunas: tickers)
+        """
+        logger.info(f"Buscando histórico para {len(tickers)} ativos de {start_date.date()} até {end_date.date()}")
+        
+        all_data = {}
+        
+        for ticker in tickers:
+            yahoo_ticker = self.normalizar_ticker_yahoo(ticker)
+            
+            try:
+                stock = yf.Ticker(yahoo_ticker)
+                hist = stock.history(start=start_date, end=end_date)
+                
+                if not hist.empty:
+                    # Usar apenas a coluna Close
+                    all_data[ticker] = hist['Close']
+                    logger.info(f"✓ {ticker}: {len(hist)} registros")
+                else:
+                    logger.warning(f"⚠ {ticker}: sem dados")
+                    all_data[ticker] = pd.Series(dtype=float)
+                
+            except Exception as e:
+                logger.error(f"✗ Erro ao buscar {ticker}: {str(e)}")
+                all_data[ticker] = pd.Series(dtype=float)
+            
+            time.sleep(0.3)  # Evitar rate limiting
+        
+        if all_data:
+            df = pd.DataFrame(all_data)
+            logger.info(f"✓ DataFrame criado com {len(df)} linhas e {len(df.columns)} colunas")
+            return df
+        
+        logger.warning("⚠ Nenhum dado histórico foi obtido")
+        return pd.DataFrame()
+    
     # ==========================================
     # FUNÇÕES DE BUSCA EM LOTE
     # ==========================================
@@ -358,6 +419,18 @@ class DataManager:
             time.sleep(0.5)  # Evitar rate limiting
         
         return precos
+    
+    def get_current_prices(self, tickers: List[str]) -> Dict[str, Optional[float]]:
+        """
+        Alias para obter_precos_lote (compatibilidade)
+        
+        Args:
+            tickers: Lista de códigos de ativos
+            
+        Returns:
+            Dicionário {ticker: preço}
+        """
+        return self.obter_precos_lote(tickers)
     
     # ==========================================
     # FUNÇÕES DE TESTE
@@ -409,33 +482,49 @@ class DataManager:
 # ==========================================
 
 # Criar instância global para uso em todo o app
-data_manager = DataManager()
+_data_manager = DataManager()
 
 
 # ==========================================
-# FUNÇÕES DE CONVENIÊNCIA
+# FUNÇÕES DE CONVENIÊNCIA (COMPATIBILIDADE)
 # ==========================================
 
 def obter_preco(ticker: str) -> Optional[float]:
     """Função de conveniência para obter preço"""
-    return data_manager.obter_preco_atual(ticker)
+    return _data_manager.obter_preco_atual(ticker)
 
 
 def obter_info(ticker: str) -> Dict[str, Any]:
     """Função de conveniência para obter informações"""
-    return data_manager.obter_informacoes_ativo(ticker)
+    return _data_manager.obter_informacoes_ativo(ticker)
 
 
 def obter_dividendos(ticker: str) -> pd.DataFrame:
     """Função de conveniência para obter dividendos"""
-    return data_manager.obter_dividendos(ticker)
+    return _data_manager.obter_dividendos(ticker)
 
 
 def obter_historico(ticker: str, periodo: str = '1y') -> pd.DataFrame:
     """Função de conveniência para obter histórico"""
-    return data_manager.obter_historico(ticker, periodo)
+    return _data_manager.obter_historico(ticker, periodo)
 
 
 def testar_apis() -> Dict[str, bool]:
     """Função de conveniência para testar APIs"""
-    return data_manager.testar_conexao()
+    return _data_manager.testar_conexao()
+
+
+# Funções para compatibilidade com código existente
+def get_price_history(tickers: List[str], start_date: datetime, end_date: datetime) -> pd.DataFrame:
+    """Compatibilidade: busca histórico de preços"""
+    return _data_manager.get_price_history(tickers, start_date, end_date)
+
+
+def get_dividends(ticker: str, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None) -> pd.DataFrame:
+    """Compatibilidade: busca dividendos"""
+    return _data_manager.get_dividends(ticker, start_date, end_date)
+
+
+def get_current_prices(tickers: List[str]) -> Dict[str, Optional[float]]:
+    """Compatibilidade: busca preços atuais"""
+    return _data_manager.get_current_prices(tickers)
