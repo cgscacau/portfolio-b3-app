@@ -5,9 +5,11 @@ Permite criar, editar, salvar e comparar múltiplos portfólios
 
 import streamlit as st
 import pandas as pd
+import numpy as np  # ← ADICIONAR
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from scipy.optimize import minimize  # ← ADICIONAR
 
 # Importar módulos
 from core.portfolio import (
