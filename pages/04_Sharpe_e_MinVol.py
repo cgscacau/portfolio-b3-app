@@ -5,19 +5,26 @@ Otimizações específicas: Máximo Sharpe, Mínima Volatilidade e Dividendos Re
 
 import streamlit as st
 import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import sys
 from pathlib import Path
 
+# Adicionar path
 root_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(root_dir))
 
-from core import data, metrics
+from core import data
 from core.init import init_all
 
-st.set_page_config(page_title="Sharpe e MinVol", page_icon="⚖️", layout="wide")
+st.set_page_config(
+    page_title="Sharpe e MinVol",
+    page_icon="⚖️",
+    layout="wide"
+)
 
-# INICIALIZAR
+# INICIALIZAR SESSION STATE
 init_all()
 
 def initialize_session_state():
