@@ -8,16 +8,10 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 
 # Importar módulos
 from core.data import get_price_history
 from core.cache import cache_manager
-from core.email_alerts import (
-    enviar_alerta_oportunidades,
-    testar_configuracao_email,
-    enviar_email_teste
-)
 
 
 # ==========================================
@@ -248,26 +242,6 @@ st.markdown("---")
 with st.sidebar:
     st.header("⚙️ Configurações")
     
-    # Teste de email
-    st.subheader("📧 Email")
-    
-    email_configurado = testar_configuracao_email()
-    
-    if email_configurado:
-        st.success("✅ Email configurado")
-        
-        if st.button("📨 Enviar Email Teste", use_container_width=True):
-            with st.spinner("Enviando..."):
-                if enviar_email_teste():
-                    st.success("✅ Email enviado! Verifique sua caixa de entrada.")
-                else:
-                    st.error("❌ Erro ao enviar. Verifique os Secrets.")
-    else:
-        st.error("❌ Email não configurado")
-        st.info("Configure em Settings → Secrets")
-    
-    st.markdown("---")
-    
     # Parâmetros do indicador
     st.subheader("📊 Parâmetros")
     
@@ -474,18 +448,6 @@ if st.button("🚀 Analisar Oportunidades", type="primary", use_container_width=
     # Mostrar resultados
     if oportunidades:
         st.success(f"✅ {len(oportunidades)} oportunidade(s) detectada(s)!")
-        
-        # Botão de enviar email
-        col1, col2 = st.columns([3, 1])
-        
-        with col2:
-            if email_configurado:
-                if st.button("📧 Enviar por Email", use_container_width=True):
-                    with st.spinner("Enviando email..."):
-                        if enviar_alerta_oportunidades(oportunidades):
-                            st.success("✅ Email enviado com sucesso!")
-                        else:
-                            st.error("❌ Erro ao enviar email")
     else:
         st.info("ℹ️ Nenhuma oportunidade com convergência detectada no momento")
 
@@ -581,6 +543,12 @@ if 'cacaus_oportunidades' in st.session_state and st.session_state.cacaus_oportu
 st.markdown("---")
 st.markdown("""
 ### 📖 Como funciona o Cacau's Channel?
+
+**Componentes:**
+- 🔴 **Linha Superior:** Máxima dos últimos 20 períodos
+- 🟢 **Linha Inferior:** Mínima dos últimos 30 períodos
+- ⚪ **Linha Média:** (Superior + Inferior) / 2
+- 🟠 **EMA da Média:** Média móvel exponencial da linha média (9 períodos)
 
 **Regras de Sinal:**
 - 🟢 **COMPRA:** Linha Branca (Média) acima da Linha Laranja (EMA) no Diário E Semanal
