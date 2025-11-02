@@ -79,7 +79,6 @@ class DataManager:
     # REQUISIÇÃO DIRETA (COM CACHE)
     # ==========================================
     
-    @cache_historical_data
     def _fetch_yahoo_data_cached(
         self,
         ticker: str,
@@ -87,6 +86,7 @@ class DataManager:
         end_timestamp: int,
         interval: str = '1d'
     ) -> Optional[pd.DataFrame]:
+
         """
         Versão CACHEADA de fetch_yahoo_data
         Cache: 24 horas
@@ -505,12 +505,150 @@ class DataManager:
         
         return resultado
 
+# ==========================================
+# FUNÇÕES CACHEADAS (FORA DA CLASSE)
+# ==========================================
+
+@cache_historical_data
+def _fetch_yahoo_data_cached_wrapper(
+    ticker: str,
+    start_timestamp: int,
+    end_timestamp: int,
+    interval: str = '1d',
+    base_url: str = "https://query1.finance.yahoo.com",
+    session: requests.Session = None,
+    max_retries: int = 3,
+    timeout: int = 30
+) -> Optional[pd.DataFrame]:
+    """
+    Wrapper cacheado para busca de dados
+    Cache: 24 horas
+    """
+    if session is None:
+        session = get_http_session()
+    
+    ticker_normalizado = ticker.upper().strip()
+    if not ticker_normalizado.endswith('.SA'):
+        ticker_normalizado = f"{ticker_normalizado}.SA"
+    
+    url = f"{base_url}/v8/finance/chart/{ticker_normalizado}"
+    
+    params = {
+        'period1': start_timestamp,
+        'period2': end_timestamp,
+        'interval': interval,
+        'events': 'history',
+        'includeAdjustedClose': 'true'
+    }
+    
+    for tentativa in range(max_retries):
+        try:
+            logger.info(f"    → Requisição HTTP tentativa {tentativa + 1}")
+            
+            response = session.get(url, params=params, timeout=timeout)
+            
+            logger.info(f"    ← Status: {response.status_code}")
+            
+            if response.status_code != 200:
+                if tentativa < max_retries - 1:
+                    time.sleep(2 ** tentativa)
+                    continue
+                logger.error(f"    ✗ Status code: {response.status_code}")
+                cache_manager.stats.registrar_miss()
+                return None
+            
+            data = response.json()
+            
+            if 'chart' not in data:
+                logger.warning(f"    ⚠ Resposta sem 'chart'")
+                cache_manager.stats.registrar_miss()
+                return None
+            
+            if 'result' not in data['chart'] or not data['chart']['result']:
+                logger.warning(f"    ⚠ Resposta sem 'result'")
+                cache_manager.stats.registrar_miss()
+                return None
+            
+            result = data['chart']['result'][0]
+            timestamps = result.get('timestamp', [])
+            
+            if not timestamps:
+                logger.warning(f"    ⚠ Sem timestamps")
+                cache_manager.stats.registrar_miss()
+                return None
+            
+            indicators = result.get('indicators', {})
+            quote = indicators.get('quote', [{}])[0]
+            adjclose = indicators.get('adjclose', [{}])[0]
+            
+            df = pd.DataFrame({
+                'Date': pd.to_datetime(timestamps, unit='s'),
+                'Open': quote.get('open', []),
+                'High': quote.get('high', []),
+                'Low': quote.get('low', []),
+                'Close': quote.get('close', []),
+                'Volume': quote.get('volume', []),
+                'Adj Close': adjclose.get('adjclose', quote.get('close', []))
+            })
+            
+            df = df.set_index('Date')
+            df = df.dropna(subset=['Close'])
+            
+            if not df.empty:
+                logger.info(f"    ✓ {len(df)} registros obtidos")
+                cache_manager.stats.registrar_hit()
+                return df
+            else:
+                logger.warning(f"    ⚠ DataFrame vazio após limpeza")
+                cache_manager.stats.registrar_miss()
+                return None
+                
+        except Exception as e:
+            logger.error(f"    ✗ Erro: {str(e)}")
+            if tentativa < max_retries - 1:
+                time.sleep(2 ** tentativa)
+            continue
+    
+    cache_manager.stats.registrar_miss()
+    return None
+
+
+# ==========================================
+# DATA MANAGER
+# ==========================================
 
 # ==========================================
 # INSTÂNCIA GLOBAL
 # ==========================================
 
 _data_manager = DataManager()
+
+
+def _fetch_yahoo_data_cached(
+    self,
+    ticker: str,
+    start_timestamp: int,
+    end_timestamp: int,
+    interval: str = '1d'
+) -> Optional[pd.DataFrame]:
+    """
+    Versão CACHEADA de fetch_yahoo_data
+    Cache: 24 horas
+    """
+    cache_manager.stats.registrar_request()
+    logger.info(f"  🔍 Buscando dados (pode usar cache): {ticker}")
+    
+    # Chama função cacheada fora da classe
+    return _fetch_yahoo_data_cached_wrapper(
+        ticker=ticker,
+        start_timestamp=start_timestamp,
+        end_timestamp=end_timestamp,
+        interval=interval,
+        base_url=self.base_url,
+        session=self.session,
+        max_retries=self.max_retries,
+        timeout=self.timeout
+    )
 
 
 # ==========================================
