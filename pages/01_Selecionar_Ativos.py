@@ -87,6 +87,7 @@ def apply_liquidity_filter():
             min_value=1,
             max_value=30,
             value=5,
+            key="liq_min_sessions",
             help="Mínimo de dias com negociação"
         )
     
@@ -101,7 +102,8 @@ def apply_liquidity_filter():
                 "Muito Alta (> 50.000.000)",
                 "Personalizado"
             ],
-            index=1
+            index=1,
+            key="liq_level"
         )
         
         liquidity_map = {
@@ -119,7 +121,8 @@ def apply_liquidity_filter():
                 max_value=1000000000,
                 value=100000,
                 step=10000,
-                format="%d"
+                format="%d",
+                key="liq_custom_volume"
             )
         else:
             min_volume = liquidity_map[liquidity_level]
@@ -129,7 +132,7 @@ def apply_liquidity_filter():
     col1, col2 = st.columns(2)
     
     with col1:
-        if st.button("⚡ Usar Todos (Sem Filtro)", use_container_width=True):
+        if st.button("⚡ Usar Todos", use_container_width=True, key="btn_skip_liq"):
             universe_df['is_traded_30d'] = True
             universe_df['avg_volume_30d'] = 1000000
             universe_df['sessions_traded_30d'] = 20
@@ -142,7 +145,7 @@ def apply_liquidity_filter():
             st.rerun()
     
     with col2:
-        if st.button("🔍 Verificar Liquidez", use_container_width=True, type="primary"):
+        if st.button("🔍 Verificar", use_container_width=True, type="primary", key="btn_apply_liq"):
             
             filtered_df = data.filter_traded_last_30d(
                 universe_df,
@@ -156,7 +159,7 @@ def apply_liquidity_filter():
             st.session_state.filtered_universe_df = traded_df
             st.session_state.liquidity_applied = True
             
-            # Estatísticas
+            # Stats
             col1, col2, col3, col4 = st.columns(4)
             
             with col1:
@@ -167,7 +170,7 @@ def apply_liquidity_filter():
             
             with col3:
                 pct = (len(traded_df) / len(universe_df) * 100) if len(universe_df) > 0 else 0
-                st.metric("% Aprovado", f"{pct:.1f}%")
+                st.metric("% OK", f"{pct:.1f}%")
             
             with col4:
                 if len(traded_df) > 0:
@@ -175,9 +178,9 @@ def apply_liquidity_filter():
                     st.metric("Vol. Médio", f"{avg_vol/1e6:.1f}M")
             
             if len(traded_df) > 0:
-                st.success(f"✅ {len(traded_df)} ativos líquidos!")
+                st.success(f"✅ {len(traded_df)} líquidos!")
                 
-                with st.expander("🔥 Top 10 Mais Líquidos"):
+                with st.expander("🔥 Top 10"):
                     top10 = traded_df.nlargest(10, 'avg_volume_30d')[
                         ['ticker', 'nome', 'avg_volume_30d', 'sessions_traded_30d']
                     ].copy()
@@ -216,7 +219,8 @@ def show_simple_filters():
         selected_sectors = st.multiselect(
             "Setores:",
             options=all_sectors,
-            default=[]
+            default=[],
+            key="filt_sectors"
         )
     
     with col2:
@@ -225,7 +229,8 @@ def show_simple_filters():
         selected_types = st.multiselect(
             "Tipos:",
             options=all_types,
-            default=[]
+            default=[],
+            key="filt_types"
         )
     
     # Aplicar
@@ -240,7 +245,8 @@ def show_simple_filters():
     # Busca
     search = st.text_input(
         "🔍 Buscar:",
-        placeholder="Ticker ou nome..."
+        placeholder="Ticker ou nome...",
+        key="filt_search"
     )
     
     if search:
@@ -255,7 +261,7 @@ def show_simple_filters():
     st.markdown(f"### 📋 Disponíveis ({len(filtered)})")
     
     if filtered.empty:
-        st.warning("⚠️ Nenhum ativo encontrado")
+        st.warning("⚠️ Nenhum encontrado")
         return
     
     # Tabela
@@ -270,31 +276,31 @@ def show_simple_filters():
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        if st.button("✅ Todos", use_container_width=True):
+        if st.button("✅ Todos", use_container_width=True, key="btn_sel_all"):
             st.session_state.selected_tickers = filtered['ticker'].tolist()
             st.success(f"✅ {len(st.session_state.selected_tickers)} selecionados!")
             st.rerun()
     
     with col2:
-        if st.button("🔥 Top 20", use_container_width=True):
+        if st.button("🔥 Top 20", use_container_width=True, key="btn_sel_top20"):
             if 'avg_volume_30d' in filtered.columns:
                 top = filtered.nlargest(20, 'avg_volume_30d')
                 st.session_state.selected_tickers = top['ticker'].tolist()
-                st.success(f"✅ Top 20 selecionados!")
+                st.success("✅ Top 20!")
                 st.rerun()
             else:
                 st.warning("⚠️ Aplique filtro de liquidez")
     
     with col3:
-        if st.button("🎲 10 Aleatórios", use_container_width=True):
-            sample_size = min(10, len(filtered))
-            random = filtered.sample(n=sample_size)
+        if st.button("🎲 10 Random", use_container_width=True, key="btn_sel_random"):
+            n = min(10, len(filtered))
+            random = filtered.sample(n=n)
             st.session_state.selected_tickers = random['ticker'].tolist()
-            st.success(f"✅ {sample_size} aleatórios!")
+            st.success(f"✅ {n} aleatórios!")
             st.rerun()
     
     with col4:
-        if st.button("🗑️ Limpar", use_container_width=True):
+        if st.button("🗑️ Limpar", use_container_width=True, key="btn_clear_filters"):
             st.session_state.selected_tickers = []
             st.success("✅ Limpo!")
             st.rerun()
@@ -325,7 +331,7 @@ def show_manual_selection():
         options.append(option)
         ticker_map[option] = ticker
     
-    # Pré-selecionar
+    # Defaults
     defaults = []
     for ticker in st.session_state.selected_tickers:
         if ticker in working_df['ticker'].values:
@@ -335,14 +341,15 @@ def show_manual_selection():
     selected_options = st.multiselect(
         "Selecione:",
         options=options,
-        default=defaults
+        default=defaults,
+        key="manual_multiselect"
     )
     
     selected_tickers = [ticker_map[opt] for opt in selected_options]
     
     st.info(f"📊 {len(selected_tickers)} selecionados")
     
-    if st.button("💾 Salvar", use_container_width=True, type="primary"):
+    if st.button("💾 Salvar", use_container_width=True, type="primary", key="btn_save_manual"):
         st.session_state.selected_tickers = selected_tickers
         st.success(f"✅ {len(selected_tickers)} salvos!")
         st.rerun()
@@ -411,7 +418,8 @@ def show_current_selection():
             "📥 TXT",
             tickers_text,
             "tickers.txt",
-            use_container_width=True
+            use_container_width=True,
+            key="btn_download_txt"
         )
     
     with col2:
@@ -424,11 +432,12 @@ def show_current_selection():
                 "📥 CSV",
                 csv,
                 "tickers.csv",
-                use_container_width=True
+                use_container_width=True,
+                key="btn_download_csv"
             )
     
     with col3:
-        if st.button("🗑️ Limpar", use_container_width=True):
+        if st.button("🗑️ Limpar Tudo", use_container_width=True, key="btn_clear_all_selection"):
             st.session_state.selected_tickers = []
             st.success("✅ Limpo!")
             st.rerun()
@@ -531,7 +540,7 @@ def main():
         """)
     
     st.markdown("---")
-    st.caption("💡 Recomendado: 10-30 ativos para análise balanceada")
+    st.caption("💡 Recomendado: 10-30 ativos")
 
 
 if __name__ == "__main__":
