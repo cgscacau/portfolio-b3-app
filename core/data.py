@@ -138,7 +138,7 @@ class DataManager:
             except Exception as e:
                 logger.warning(f"Yahoo tentativa {tentativa + 1}/{self.max_retries}: {str(e)}")
                 if tentativa < self.max_retries - 1:
-                    time.sleep(2 ** tentativa)  # Exponential backoff
+                    time.sleep(2 ** tentativa)
                 continue
         
         return None
@@ -319,7 +319,7 @@ class DataManager:
         return self.obter_dividendos(ticker, start_date)
     
     # ==========================================
-    # FUNÇÕES DE BUSCA DE HISTÓRICO
+    # FUNÇÕES DE BUSCA DE HISTÓRICO - CORRIGIDAS
     # ==========================================
     
     def obter_historico(self, ticker: str, periodo: str = '1y', intervalo: str = '1d') -> pd.DataFrame:
@@ -352,6 +352,126 @@ class DataManager:
         logger.warning(f"⚠ Nenhum histórico encontrado para {ticker}")
         return pd.DataFrame()
     
+    def _buscar_historico_individual(self, ticker: str, start_date: datetime, end_date: datetime) -> pd.Series:
+        """
+        Busca histórico de um único ativo com tratamento robusto de erros
+        
+        Args:
+            ticker: Código do ativo
+            start_date: Data inicial
+            end_date: Data final
+            
+        Returns:
+            Series com preços de fechamento
+        """
+        yahoo_ticker = self.normalizar_ticker_yahoo(ticker)
+        
+        for tentativa in range(self.max_retries):
+            try:
+                # Tentar download com yfinance
+                stock = yf.Ticker(yahoo_ticker)
+                
+                # Converter datas para string no formato correto
+                start_str = start_date.strftime('%Y-%m-%d')
+                end_str = end_date.strftime('%Y-%m-%d')
+                
+                # Buscar histórico
+                hist = stock.history(start=start_str, end=end_str, auto_adjust=True)
+                
+                if not hist.empty and 'Close' in hist.columns:
+                    logger.info(f"✓ {ticker}: {len(hist)} registros obtidos")
+                    return hist['Close']
+                
+                # Se falhou, tentar com download direto
+                df = yf.download(
+                    yahoo_ticker,
+                    start=start_str,
+                    end=end_str,
+                    progress=False,
+                    auto_adjust=True
+                )
+                
+                if not df.empty and 'Close' in df.columns:
+                    logger.info(f"✓ {ticker}: {len(df)} registros (método alternativo)")
+                    return df['Close']
+                
+                logger.warning(f"⚠ {ticker}: tentativa {tentativa + 1} - sem dados")
+                
+            except Exception as e:
+                logger.warning(f"⚠ {ticker}: tentativa {tentativa + 1} - erro: {str(e)}")
+                
+            # Aguardar antes de tentar novamente
+            if tentativa < self.max_retries - 1:
+                time.sleep(1)
+        
+        logger.error(f"✗ {ticker}: falhou após {self.max_retries} tentativas")
+        return pd.Series(dtype=float, name=ticker)
+    
+    def _get_price_history_no_cache(self, tickers: List[str], start_date: datetime, end_date: datetime) -> pd.DataFrame:
+        """
+        Busca histórico sem cache - VERSÃO CORRIGIDA
+        
+        Args:
+            tickers: Lista de códigos de ativos
+            start_date: Data inicial
+            end_date: Data final
+            
+        Returns:
+            DataFrame com histórico de preços
+        """
+        logger.info(f"Buscando histórico para {len(tickers)} ativos")
+        logger.info(f"Período: {start_date.date()} até {end_date.date()}")
+        
+        # Validar datas
+        if start_date >= end_date:
+            logger.error("Data inicial deve ser anterior à data final")
+            return pd.DataFrame()
+        
+        # Ajustar end_date para incluir o dia completo
+        end_date_adjusted = end_date + timedelta(days=1)
+        
+        all_data = {}
+        sucesso = 0
+        falhas = 0
+        
+        # Processar em lotes para evitar rate limiting
+        batch_size = 10
+        
+        for i in range(0, len(tickers), batch_size):
+            batch = tickers[i:i + batch_size]
+            logger.info(f"Processando lote {i//batch_size + 1}/{(len(tickers)-1)//batch_size + 1}")
+            
+            for ticker in batch:
+                series = self._buscar_historico_individual(ticker, start_date, end_date_adjusted)
+                
+                if not series.empty:
+                    all_data[ticker] = series
+                    sucesso += 1
+                else:
+                    all_data[ticker] = pd.Series(dtype=float, name=ticker)
+                    falhas += 1
+                
+                # Pequeno delay entre requisições
+                time.sleep(0.2)
+            
+            # Delay maior entre lotes
+            if i + batch_size < len(tickers):
+                time.sleep(1)
+        
+        logger.info(f"Resultado: {sucesso} sucessos, {falhas} falhas")
+        
+        if all_data:
+            df = pd.DataFrame(all_data)
+            
+            # Remover colunas completamente vazias
+            df = df.dropna(axis=1, how='all')
+            
+            logger.info(f"✓ DataFrame criado: {len(df)} linhas x {len(df.columns)} colunas")
+            return df
+        
+        logger.error("✗ Nenhum dado foi obtido")
+        return pd.DataFrame()
+    
     @st.cache_data(ttl=3600, show_spinner=False)
     def _get_price_history_cached(_self, tickers_tuple: tuple, start_date: datetime, end_date: datetime) -> pd.DataFrame:
         """
@@ -367,51 +487,6 @@ class DataManager:
         """
         tickers = list(tickers_tuple)
         return _self._get_price_history_no_cache(tickers, start_date, end_date)
-    
-    def _get_price_history_no_cache(self, tickers: List[str], start_date: datetime, end_date: datetime) -> pd.DataFrame:
-        """
-        Busca histórico sem cache
-        
-        Args:
-            tickers: Lista de códigos de ativos
-            start_date: Data inicial
-            end_date: Data final
-            
-        Returns:
-            DataFrame com histórico de preços
-        """
-        logger.info(f"Buscando histórico para {len(tickers)} ativos de {start_date.date()} até {end_date.date()}")
-        
-        all_data = {}
-        
-        for ticker in tickers:
-            yahoo_ticker = self.normalizar_ticker_yahoo(ticker)
-            
-            try:
-                stock = yf.Ticker(yahoo_ticker)
-                hist = stock.history(start=start_date, end=end_date)
-                
-                if not hist.empty:
-                    # Usar apenas a coluna Close
-                    all_data[ticker] = hist['Close']
-                    logger.info(f"✓ {ticker}: {len(hist)} registros")
-                else:
-                    logger.warning(f"⚠ {ticker}: sem dados")
-                    all_data[ticker] = pd.Series(dtype=float)
-                
-            except Exception as e:
-                logger.error(f"✗ Erro ao buscar {ticker}: {str(e)}")
-                all_data[ticker] = pd.Series(dtype=float)
-            
-            time.sleep(0.3)  # Evitar rate limiting
-        
-        if all_data:
-            df = pd.DataFrame(all_data)
-            logger.info(f"✓ DataFrame criado com {len(df)} linhas e {len(df.columns)} colunas")
-            return df
-        
-        logger.warning("⚠ Nenhum dado histórico foi obtido")
-        return pd.DataFrame()
     
     def get_price_history(self, tickers: List[str], start_date: datetime, end_date: datetime, use_cache: bool = True) -> pd.DataFrame:
         """
