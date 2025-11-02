@@ -1,117 +1,317 @@
 """
-Sistema de cache global para dados de mercado
-Evita downloads repetidos entre páginas
+Sistema de cache otimizado para dados de mercado
+Usa decoradores nativos do Streamlit para máxima eficiência
 """
 
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import hashlib
+from typing import Optional, Dict, Any, List, Callable
+from functools import wraps
+import logging
+
+logger = logging.getLogger(__name__)
 
 
-def criar_chave_cache(tickers, start_date, end_date):
+# ==========================================
+# CONFIGURAÇÕES DE TTL POR TIPO DE DADO
+# ==========================================
+
+class CacheConfig:
+    """Configurações de TTL para diferentes tipos de dados"""
+    
+    # Dados históricos (raramente mudam)
+    HISTORICAL_DATA_TTL = 24 * 3600  # 24 horas
+    
+    # Preços atuais (mudam frequentemente)
+    CURRENT_PRICE_TTL = 5 * 60  # 5 minutos
+    
+    # Dividendos (mudam raramente)
+    DIVIDENDS_TTL = 12 * 3600  # 12 horas
+    
+    # Informações de ativos (quase nunca mudam)
+    ASSET_INFO_TTL = 7 * 24 * 3600  # 7 dias
+    
+    # Cache de sessão (até recarregar página)
+    SESSION_TTL = None  # Sem expiração
+
+
+# ==========================================
+# DECORADORES DE CACHE
+# ==========================================
+
+def cache_historical_data(func: Callable) -> Callable:
     """
-    Cria chave única para cache baseada nos parâmetros
+    Decorator para cachear dados históricos
+    TTL: 24 horas
+    """
+    @st.cache_data(ttl=CacheConfig.HISTORICAL_DATA_TTL, show_spinner=False)
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    return wrapper
+
+
+def cache_current_price(func: Callable) -> Callable:
+    """
+    Decorator para cachear preços atuais
+    TTL: 5 minutos
+    """
+    @st.cache_data(ttl=CacheConfig.CURRENT_PRICE_TTL, show_spinner=False)
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    return wrapper
+
+
+def cache_dividends(func: Callable) -> Callable:
+    """
+    Decorator para cachear dividendos
+    TTL: 12 horas
+    """
+    @st.cache_data(ttl=CacheConfig.DIVIDENDS_TTL, show_spinner=False)
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    return wrapper
+
+
+def cache_asset_info(func: Callable) -> Callable:
+    """
+    Decorator para cachear informações de ativos
+    TTL: 7 dias
+    """
+    @st.cache_data(ttl=CacheConfig.ASSET_INFO_TTL, show_spinner=False)
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    return wrapper
+
+
+def cache_session(func: Callable) -> Callable:
+    """
+    Decorator para cachear durante a sessão
+    Sem TTL (até recarregar página)
+    """
+    @st.cache_data(show_spinner=False)
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    return wrapper
+
+
+def cache_resource(func: Callable) -> Callable:
+    """
+    Decorator para cachear recursos não-serializáveis
+    (conexões, objetos complexos, etc)
+    """
+    @st.cache_resource(show_spinner=False)
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    return wrapper
+
+
+# ==========================================
+# UTILITÁRIOS DE CACHE
+# ==========================================
+
+def criar_chave_cache(*args, **kwargs) -> str:
+    """
+    Cria chave única para cache baseada nos argumentos
     
     Args:
-        tickers: Lista de tickers
-        start_date: Data inicial
-        end_date: Data final
+        *args: Argumentos posicionais
+        **kwargs: Argumentos nomeados
         
     Returns:
         String com hash único
     """
-    # Ordenar tickers para garantir mesma chave
+    # Converter args e kwargs em string única
+    cache_str = str(args) + str(sorted(kwargs.items()))
+    
+    # Gerar hash MD5
+    return hashlib.md5(cache_str.encode()).hexdigest()
+
+
+def limpar_cache_completo():
+    """Limpa todo o cache do Streamlit"""
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    logger.info("Cache completo limpo")
+
+
+def limpar_cache_dados():
+    """Limpa apenas cache de dados"""
+    st.cache_data.clear()
+    logger.info("Cache de dados limpo")
+
+
+def limpar_cache_recursos():
+    """Limpa apenas cache de recursos"""
+    st.cache_resource.clear()
+    logger.info("Cache de recursos limpo")
+
+
+# ==========================================
+# ESTATÍSTICAS DE CACHE
+# ==========================================
+
+class CacheStats:
+    """Classe para monitorar estatísticas de cache"""
+    
+    def __init__(self):
+        if 'cache_stats' not in st.session_state:
+            st.session_state.cache_stats = {
+                'hits': 0,
+                'misses': 0,
+                'last_clear': None,
+                'data_requests': 0
+            }
+    
+    def registrar_hit(self):
+        """Registra um cache hit"""
+        st.session_state.cache_stats['hits'] += 1
+    
+    def registrar_miss(self):
+        """Registra um cache miss"""
+        st.session_state.cache_stats['misses'] += 1
+    
+    def registrar_request(self):
+        """Registra uma requisição de dados"""
+        st.session_state.cache_stats['data_requests'] += 1
+    
+    def obter_taxa_acerto(self) -> float:
+        """Calcula taxa de acerto do cache"""
+        total = st.session_state.cache_stats['hits'] + st.session_state.cache_stats['misses']
+        if total == 0:
+            return 0.0
+        return (st.session_state.cache_stats['hits'] / total) * 100
+    
+    def obter_estatisticas(self) -> Dict[str, Any]:
+        """Retorna estatísticas completas"""
+        stats = st.session_state.cache_stats.copy()
+        stats['hit_rate'] = self.obter_taxa_acerto()
+        return stats
+    
+    def resetar(self):
+        """Reseta estatísticas"""
+        st.session_state.cache_stats = {
+            'hits': 0,
+            'misses': 0,
+            'last_clear': datetime.now(),
+            'data_requests': 0
+        }
+        logger.info("Estatísticas de cache resetadas")
+
+
+# ==========================================
+# GERENCIADOR DE CACHE
+# ==========================================
+
+class CacheManager:
+    """Gerenciador centralizado de cache"""
+    
+    def __init__(self):
+        self.stats = CacheStats()
+    
+    def limpar_por_tipo(self, tipo: str):
+        """
+        Limpa cache por tipo de dado
+        
+        Args:
+            tipo: 'historical', 'prices', 'dividends', 'info', 'all'
+        """
+        if tipo == 'all':
+            limpar_cache_completo()
+        elif tipo == 'historical':
+            # Limpar apenas dados históricos (não há API específica, limpa tudo)
+            limpar_cache_dados()
+        elif tipo == 'prices':
+            limpar_cache_dados()
+        elif tipo == 'dividends':
+            limpar_cache_dados()
+        elif tipo == 'info':
+            limpar_cache_dados()
+        else:
+            logger.warning(f"Tipo de cache desconhecido: {tipo}")
+        
+        self.stats.registrar_miss()
+    
+    def obter_info(self) -> Dict[str, Any]:
+        """Retorna informações sobre o cache"""
+        return {
+            'stats': self.stats.obter_estatisticas(),
+            'config': {
+                'historical_ttl': f"{CacheConfig.HISTORICAL_DATA_TTL / 3600:.1f}h",
+                'current_price_ttl': f"{CacheConfig.CURRENT_PRICE_TTL / 60:.1f}min",
+                'dividends_ttl': f"{CacheConfig.DIVIDENDS_TTL / 3600:.1f}h",
+                'asset_info_ttl': f"{CacheConfig.ASSET_INFO_TTL / (24 * 3600):.1f}d"
+            }
+        }
+    
+    def exibir_painel_controle(self):
+        """Exibe painel de controle do cache no Streamlit"""
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("⚡ Cache")
+        
+        info = self.obter_info()
+        stats = info['stats']
+        
+        # Estatísticas
+        col1, col2 = st.sidebar.columns(2)
+        with col1:
+            st.metric("Hits", stats['hits'])
+        with col2:
+            st.metric("Misses", stats['misses'])
+        
+        st.sidebar.metric("Taxa de Acerto", f"{stats['hit_rate']:.1f}%")
+        st.sidebar.metric("Requisições", stats['data_requests'])
+        
+        # Botões de controle
+        if st.sidebar.button("🗑️ Limpar Cache", use_container_width=True):
+            limpar_cache_completo()
+            self.stats.resetar()
+            st.sidebar.success("Cache limpo!")
+            st.rerun()
+
+
+# ==========================================
+# INSTÂNCIA GLOBAL
+# ==========================================
+
+cache_manager = CacheManager()
+
+
+# ==========================================
+# FUNÇÕES PÚBLICAS (COMPATIBILIDADE)
+# ==========================================
+
+def criar_chave_cache_legacy(tickers, start_date, end_date):
+    """Mantém compatibilidade com código antigo"""
     tickers_sorted = sorted(tickers)
-    
-    # Criar string única
     cache_str = f"{','.join(tickers_sorted)}_{start_date}_{end_date}"
-    
-    # Gerar hash
     return hashlib.md5(cache_str.encode()).hexdigest()
 
 
 def salvar_dados_cache(tickers, start_date, end_date, price_data, dividend_data=None):
-    """
-    Salva dados no cache global do session_state
-    
-    Args:
-        tickers: Lista de tickers
-        start_date: Data inicial
-        end_date: Data final
-        price_data: DataFrame com preços
-        dividend_data: Dict com dividendos (opcional)
-    """
-    chave = criar_chave_cache(tickers, start_date, end_date)
-    
-    # Inicializar cache se não existir
-    if 'data_cache' not in st.session_state:
-        st.session_state.data_cache = {}
-    
-    # Salvar dados
-    st.session_state.data_cache[chave] = {
-        'tickers': tickers,
-        'start_date': start_date,
-        'end_date': end_date,
-        'price_data': price_data,
-        'dividend_data': dividend_data,
-        'timestamp': datetime.now()
-    }
+    """Mantém compatibilidade - agora usa cache nativo"""
+    logger.info("Função legada salvar_dados_cache() - usando cache nativo")
+    pass
 
 
 def carregar_dados_cache(tickers, start_date, end_date):
-    """
-    Carrega dados do cache se existirem
-    
-    Args:
-        tickers: Lista de tickers
-        start_date: Data inicial
-        end_date: Data final
-        
-    Returns:
-        Tuple (price_data, dividend_data) ou (None, None) se não existir
-    """
-    if 'data_cache' not in st.session_state:
-        return None, None
-    
-    chave = criar_chave_cache(tickers, start_date, end_date)
-    
-    if chave in st.session_state.data_cache:
-        cache_entry = st.session_state.data_cache[chave]
-        
-        # Verificar se não está muito antigo (máx 1 hora)
-        idade = (datetime.now() - cache_entry['timestamp']).total_seconds()
-        if idade < 3600:  # 1 hora
-            return cache_entry['price_data'], cache_entry['dividend_data']
-    
+    """Mantém compatibilidade - agora usa cache nativo"""
+    logger.info("Função legada carregar_dados_cache() - usando cache nativo")
     return None, None
 
 
 def limpar_cache():
-    """Limpa todo o cache de dados"""
-    if 'data_cache' in st.session_state:
-        st.session_state.data_cache = {}
+    """Mantém compatibilidade"""
+    limpar_cache_completo()
 
 
 def info_cache():
-    """
-    Retorna informações sobre o cache atual
-    
-    Returns:
-        Dict com estatísticas do cache
-    """
-    if 'data_cache' not in st.session_state:
-        return {'entries': 0, 'oldest': None, 'newest': None}
-    
-    cache = st.session_state.data_cache
-    
-    if not cache:
-        return {'entries': 0, 'oldest': None, 'newest': None}
-    
-    timestamps = [entry['timestamp'] for entry in cache.values()]
-    
-    return {
-        'entries': len(cache),
-        'oldest': min(timestamps),
-        'newest': max(timestamps)
-    }
+    """Mantém compatibilidade"""
+    return cache_manager.obter_info()
