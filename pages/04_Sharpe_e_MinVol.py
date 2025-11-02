@@ -8,13 +8,12 @@ import pandas as pd
 import numpy as np
 import sys
 from pathlib import Path
-from datetime import datetime
 
 # Adicionar diretório raiz ao path
-root_dir = Path(__file__).parent.parent.parent
+root_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(root_dir))
 
-from core import data, metrics, opt, ui
+from core import data, metrics, opt, ui, utils
 import logging
 
 logger = logging.getLogger(__name__)
@@ -29,106 +28,70 @@ st.set_page_config(
 
 def initialize_session_state():
     """Inicializa variáveis de sessão."""
-    if 'selected_tickers' not in st.session_state:
-        st.session_state.selected_tickers = []
-    
-    if 'price_data' not in st.session_state:
-        st.session_state.price_data = pd.DataFrame()
-    
-    if 'expected_returns' not in st.session_state:
-        st.session_state.expected_returns = pd.Series()
-    
-    if 'cov_matrix' not in st.session_state:
-        st.session_state.cov_matrix = pd.DataFrame()
-    
-    if 'dividend_data' not in st.session_state:
-        st.session_state.dividend_data = {}
-    
-    if 'specialized_portfolios' not in st.session_state:
-        st.session_state.specialized_portfolios = {}
+    utils.ensure_session_state_initialized()
 
 
 def check_prerequisites():
-    """Verifica se há dados necessários."""
+    """Verifica pré-requisitos."""
     if not st.session_state.selected_tickers:
-        ui.create_info_box(
-            "⚠️ Nenhum ativo selecionado. Por favor, vá para a página 'Selecionar Ativos' primeiro.",
-            "warning"
-        )
-        
-        if st.button("🎯 Ir para Seleção de Ativos", type="primary"):
-            st.switch_page("app/pages/01_Selecionar_Ativos.py")
-        
+        st.warning("⚠️ Nenhum ativo selecionado")
+        st.info("👉 Vá para **Selecionar Ativos**")
         return False
     
-    if st.session_state.expected_returns.empty or st.session_state.cov_matrix.empty:
-        ui.create_info_box(
-            "⚠️ Parâmetros de otimização não calculados. Por favor, calcule na página 'Portfólios Eficientes'.",
-            "warning"
-        )
-        
-        if st.button("📊 Ir para Portfólios Eficientes", type="primary"):
-            st.switch_page("app/pages/03_Portfólios_Eficientes.py")
-        
+    if st.session_state.expected_returns is None or st.session_state.expected_returns.empty:
+        st.warning("⚠️ Parâmetros não calculados")
+        st.info("👉 Vá para **Portfólios Eficientes** e calcule os parâmetros")
         return False
     
     return True
 
 
 def optimize_max_sharpe():
-    """Otimiza para máximo Sharpe ratio."""
+    """Otimiza para máximo Sharpe."""
     
-    ui.create_section_header(
-        "⭐ Portfólio de Máximo Sharpe",
-        "Melhor relação risco-retorno ajustada",
-        "⭐"
-    )
+    st.markdown("### ⭐ Máximo Sharpe")
     
     st.markdown("""
-    O **Portfólio de Máximo Sharpe** busca a melhor relação entre retorno excedente 
-    (acima da taxa livre de risco) e volatilidade. É ideal para investidores que 
-    buscam **eficiência** na alocação.
+    Busca a melhor relação retorno/risco. Ideal para **eficiência**.
     """)
     
-    # Parâmetros
     col1, col2 = st.columns(2)
     
     with col1:
         max_weight = st.slider(
-            "Peso máximo por ativo (%):",
+            "Peso máx/ativo (%):",
             min_value=5,
             max_value=100,
             value=20,
             step=5,
-            key="sharpe_max_weight"
+            key="sharpe_max_weight_slider"
         ) / 100
     
     with col2:
         min_weight = st.slider(
-            "Peso mínimo por ativo (%):",
+            "Peso mín/ativo (%):",
             min_value=0,
             max_value=10,
             value=0,
             step=1,
-            key="sharpe_min_weight"
+            key="sharpe_min_weight_slider"
         ) / 100
     
-    # Restrições setoriais
     apply_sector = st.checkbox(
-        "Aplicar restrições setoriais",
+        "Restrições setoriais",
         value=True,
-        key="sharpe_sector_constraints"
+        key="sharpe_sector_check"
     )
     
     sector_constraints = None
     if apply_sector and not st.session_state.universe_df.empty:
         max_sector = st.slider(
-            "Peso máximo por setor (%):",
+            "Peso máx/setor (%):",
             min_value=10,
             max_value=100,
             value=40,
             step=5,
-            key="sharpe_max_sector"
+            key="sharpe_max_sector_slider"
         ) / 100
         
         sector_constraints = opt.create_sector_constraints(
@@ -137,9 +100,9 @@ def optimize_max_sharpe():
             max_sector
         )
     
-    if st.button("⭐ Otimizar Máximo Sharpe", type="primary", use_container_width=True):
+    if st.button("⭐ Otimizar Sharpe", type="primary", use_container_width=True, key="btn_opt_sharpe"):
         
-        with st.spinner("Otimizando para máximo Sharpe..."):
+        with st.spinner("Otimizando..."):
             
             try:
                 optimizer = opt.MaxSharpeOptimizer(
@@ -155,10 +118,9 @@ def optimize_max_sharpe():
                 )
                 
                 if not weights:
-                    st.error("❌ Não foi possível otimizar com os parâmetros fornecidos")
+                    st.error("❌ Não foi possível otimizar")
                     return
                 
-                # Calcular estatísticas
                 stats = opt.calculate_portfolio_stats(
                     weights,
                     st.session_state.expected_returns,
@@ -166,79 +128,69 @@ def optimize_max_sharpe():
                     st.session_state.risk_free_rate
                 )
                 
-                # Salvar
                 st.session_state.specialized_portfolios['Máximo Sharpe'] = {
                     'weights': weights,
                     'stats': stats,
                     'type': 'max_sharpe'
                 }
                 
-                st.success("✅ Portfólio de Máximo Sharpe otimizado!")
+                st.success("✅ Máximo Sharpe otimizado!")
                 
-                # Exibir métricas
                 show_portfolio_metrics(stats, weights, "Máximo Sharpe")
                 
                 st.rerun()
             
             except Exception as e:
-                logger.error(f"Erro na otimização Sharpe: {e}")
-                st.error(f"❌ Erro na otimização: {e}")
+                logger.error(f"Erro: {e}")
+                st.error(f"❌ Erro: {e}")
 
 
 def optimize_min_volatility():
     """Otimiza para mínima volatilidade."""
     
-    ui.create_section_header(
-        "🛡️ Portfólio de Mínima Volatilidade",
-        "Menor risco possível",
-        "🛡️"
-    )
+    st.markdown("### 🛡️ Mínima Volatilidade")
     
     st.markdown("""
-    O **Portfólio de Mínima Volatilidade** busca o menor risco possível, 
-    independente do retorno. É ideal para investidores **conservadores** 
-    que priorizam preservação de capital.
+    Menor risco possível. Ideal para **conservadores**.
     """)
     
-    # Parâmetros
     col1, col2 = st.columns(2)
     
     with col1:
         max_weight = st.slider(
-            "Peso máximo por ativo (%):",
+            "Peso máx/ativo (%):",
             min_value=5,
             max_value=100,
             value=20,
             step=5,
-            key="minvol_max_weight"
+            key="minvol_max_weight_slider"
         ) / 100
     
     with col2:
         min_weight = st.slider(
-            "Peso mínimo por ativo (%):",
+            "Peso mín/ativo (%):",
             min_value=0,
             max_value=10,
             value=0,
             step=1,
-            key="minvol_min_weight"
+            key="minvol_min_weight_slider"
         ) / 100
     
-    # Restrições setoriais
     apply_sector = st.checkbox(
-        "Aplicar restrições setoriais",
+        "Restrições setoriais",
         value=True,
-        key="minvol_sector_constraints"
+        key="minvol_sector_check"
     )
     
     sector_constraints = None
     if apply_sector and not st.session_state.universe_df.empty:
         max_sector = st.slider(
-            "Peso máximo por setor (%):",
+            "Peso máx/setor (%):",
             min_value=10,
             max_value=100,
             value=40,
             step=5,
-            key="minvol_max_sector"
+            key="minvol_max_sector_slider"
         ) / 100
         
         sector_constraints = opt.create_sector_constraints(
@@ -247,9 +199,9 @@ def optimize_min_volatility():
             max_sector
         )
     
-    if st.button("🛡️ Otimizar Mínima Volatilidade", type="primary", use_container_width=True):
+    if st.button("🛡️ Otimizar MinVol", type="primary", use_container_width=True, key="btn_opt_minvol"):
         
-        with st.spinner("Otimizando para mínima volatilidade..."):
+        with st.spinner("Otimizando..."):
             
             try:
                 optimizer = opt.MinVolatilityOptimizer(
@@ -265,10 +217,9 @@ def optimize_min_volatility():
                 )
                 
                 if not weights:
-                    st.error("❌ Não foi possível otimizar com os parâmetros fornecidos")
+                    st.error("❌ Não foi possível otimizar")
                     return
                 
-                # Calcular estatísticas
                 stats = opt.calculate_portfolio_stats(
                     weights,
                     st.session_state.expected_returns,
@@ -276,66 +227,49 @@ def optimize_min_volatility():
                     st.session_state.risk_free_rate
                 )
                 
-                # Salvar
                 st.session_state.specialized_portfolios['Mínima Volatilidade'] = {
                     'weights': weights,
                     'stats': stats,
                     'type': 'min_vol'
                 }
                 
-                st.success("✅ Portfólio de Mínima Volatilidade otimizado!")
+                st.success("✅ Mínima Volatilidade otimizada!")
                 
-                # Exibir métricas
                 show_portfolio_metrics(stats, weights, "Mínima Volatilidade")
                 
                 st.rerun()
             
             except Exception as e:
-                logger.error(f"Erro na otimização MinVol: {e}")
-                st.error(f"❌ Erro na otimização: {e}")
+                logger.error(f"Erro: {e}")
+                st.error(f"❌ Erro: {e}")
 
 
 def optimize_dividend_regularity():
     """Otimiza para dividendos regulares."""
     
-    ui.create_section_header(
-        "💸 Portfólio de Dividendos Regulares",
-        "Fluxo mensal consistente de dividendos",
-        "💸"
-    )
+    st.markdown("### 💸 Dividendos Regulares")
     
     st.markdown("""
-    O **Portfólio de Dividendos Regulares** busca maximizar o dividend yield 
-    enquanto minimiza a variabilidade dos pagamentos mensais. Ideal para 
-    investidores que buscam **renda passiva consistente**.
+    Maximiza yield com fluxo mensal consistente. Ideal para **renda passiva**.
     """)
     
-    # Verificar se há dados de dividendos
+    # Verificar dividendos
     if not st.session_state.dividend_data:
-        ui.create_info_box(
-            "⚠️ Dados de dividendos não disponíveis. Carregue os dados na página 'Análise de Dividendos'.",
-            "warning"
-        )
-        
-        if st.button("💸 Ir para Análise de Dividendos", type="primary"):
-            st.switch_page("app/pages/02_Análise_de_Dividendos.py")
-        
+        st.warning("⚠️ Dados de dividendos não disponíveis")
+        st.info("👉 Vá para **Análise de Dividendos** e carregue os dados")
         return
     
-    # Preparar dados de dividendos
+    # Preparar dados
     with st.spinner("Preparando dados de dividendos..."):
         
-        # Calcular dividend yield mensal médio
         expected_monthly_divs = {}
         div_monthly_series = {}
         
         for ticker, divs in st.session_state.dividend_data.items():
             if not divs.empty and ticker in st.session_state.price_data.columns:
-                # Dividendos mensais
                 monthly = divs.resample('M').sum()
                 
                 if len(monthly) > 0:
-                    # Yield mensal médio
                     avg_price = st.session_state.price_data[ticker].mean()
                     avg_monthly_div = monthly.mean()
                     
@@ -344,14 +278,12 @@ def optimize_dividend_regularity():
                         div_monthly_series[ticker] = monthly
         
         if not expected_monthly_divs:
-            st.warning("⚠️ Nenhum ativo com dados de dividendos suficientes")
+            st.warning("⚠️ Nenhum ativo com dividendos suficientes")
             return
         
-        # Converter para Series
         expected_monthly_divs_series = pd.Series(expected_monthly_divs)
         
-        # Criar matriz de covariância dos fluxos mensais
-        # Alinhar todas as séries temporais
+        # Matriz de covariância dos fluxos
         all_dates = pd.DatetimeIndex([])
         for series in div_monthly_series.values():
             all_dates = all_dates.union(series.index)
@@ -361,61 +293,59 @@ def optimize_dividend_regularity():
             div_df[ticker] = series
         
         div_df = div_df.fillna(0)
-        
-        # Covariância dos fluxos mensais
         div_cov = div_df.cov()
     
-    st.success(f"✅ Dados preparados: {len(expected_monthly_divs)} ativos com dividendos")
+    st.success(f"✅ {len(expected_monthly_divs)} ativos com dividendos")
     
     # Parâmetros
     col1, col2, col3 = st.columns(3)
     
     with col1:
         lambda_penalty = st.slider(
-            "Penalização da variância (λ):",
+            "Penalização (λ):",
             min_value=0.0,
             max_value=1.0,
             value=0.5,
             step=0.05,
-            help="Quanto maior, mais prioriza regularidade vs yield total"
+            key="div_lambda_slider",
+            help="Maior = prioriza regularidade"
         )
     
     with col2:
         max_weight = st.slider(
-            "Peso máximo por ativo (%):",
+            "Peso máx (%):",
             min_value=5,
             max_value=100,
             value=15,
             step=5,
-            key="div_max_weight"
+            key="div_max_weight_slider"
         ) / 100
     
     with col3:
         min_yield = st.slider(
-            "Yield mínimo mensal (%):",
+            "Yield mín mensal (%):",
             min_value=0.0,
             max_value=2.0,
             value=0.0,
             step=0.1,
-            help="Yield mensal mínimo do portfólio"
+            key="div_min_yield_slider"
         ) / 100
     
-    # Restrições setoriais
     apply_sector = st.checkbox(
-        "Aplicar restrições setoriais",
+        "Restrições setoriais",
         value=True,
-        key="div_sector_constraints"
+        key="div_sector_check"
     )
     
     sector_constraints = None
     if apply_sector and not st.session_state.universe_df.empty:
         max_sector = st.slider(
-            "Peso máximo por setor (%):",
+            "Peso máx/setor (%):",
             min_value=10,
             max_value=100,
             value=40,
             step=5,
-            key="div_max_sector"
+            key="div_max_sector_slider"
         ) / 100
         
         sector_constraints = opt.create_sector_constraints(
@@ -424,12 +354,11 @@ def optimize_dividend_regularity():
             max_sector
         )
     
-    if st.button("💸 Otimizar Dividendos Regulares", type="primary", use_container_width=True):
+    if st.button("💸 Otimizar Dividendos", type="primary", use_container_width=True, key="btn_opt_div"):
         
-        with st.spinner("Otimizando para dividendos regulares..."):
+        with st.spinner("Otimizando..."):
             
             try:
-                # Alinhar retornos e covariância de preços com ativos que têm dividendos
                 aligned_tickers = expected_monthly_divs_series.index.tolist()
                 aligned_returns = st.session_state.expected_returns[aligned_tickers]
                 aligned_cov = st.session_state.cov_matrix.loc[aligned_tickers, aligned_tickers]
@@ -450,10 +379,9 @@ def optimize_dividend_regularity():
                 )
                 
                 if not weights:
-                    st.error("❌ Não foi possível otimizar com os parâmetros fornecidos")
+                    st.error("❌ Não foi possível otimizar")
                     return
                 
-                # Calcular estatísticas de preços
                 stats = opt.calculate_portfolio_stats(
                     weights,
                     aligned_returns,
@@ -461,34 +389,32 @@ def optimize_dividend_regularity():
                     st.session_state.risk_free_rate
                 )
                 
-                # Calcular estatísticas de dividendos
-                portfolio_monthly_yield = sum(weights[t] * expected_monthly_divs_series[t] for t in weights.keys())
+                # Métricas de dividendos
+                portfolio_monthly_yield = sum(
+                    weights[t] * expected_monthly_divs_series[t] for t in weights.keys()
+                )
                 portfolio_annual_yield = portfolio_monthly_yield * 12
                 
-                # Variância dos fluxos mensais
                 w_array = np.array([weights.get(t, 0) for t in div_cov.index])
                 portfolio_div_variance = np.dot(w_array, np.dot(div_cov.values, w_array))
                 portfolio_div_std = np.sqrt(portfolio_div_variance)
                 
-                # Adicionar métricas de dividendos
                 stats['monthly_yield'] = portfolio_monthly_yield
                 stats['annual_yield'] = portfolio_annual_yield
                 stats['dividend_volatility'] = portfolio_div_std
                 
-                # Salvar
                 st.session_state.specialized_portfolios['Dividendos Regulares'] = {
                     'weights': weights,
                     'stats': stats,
                     'type': 'dividend_regularity'
                 }
                 
-                st.success("✅ Portfólio de Dividendos Regulares otimizado!")
+                st.success("✅ Dividendos Regulares otimizado!")
                 
-                # Exibir métricas
                 show_portfolio_metrics(stats, weights, "Dividendos Regulares", include_dividends=True)
                 
-                # Projeção de fluxo mensal
-                st.markdown("### 📅 Projeção de Fluxo Mensal")
+                # Projeção mensal
+                st.markdown("### 📅 Projeção Mensal")
                 
                 dividend_metrics_obj = metrics.DividendMetrics(
                     st.session_state.dividend_data,
@@ -500,11 +426,10 @@ def optimize_dividend_regularity():
                 if not portfolio_monthly.empty:
                     fig = ui.plot_monthly_dividend_flow(
                         portfolio_monthly,
-                        "Fluxo Mensal Projetado - Portfólio de Dividendos Regulares"
+                        "Fluxo Mensal Projetado"
                     )
                     st.plotly_chart(fig, use_container_width=True)
                     
-                    # Estatísticas do fluxo
                     col1, col2, col3 = st.columns(3)
                     
                     with col1:
@@ -519,7 +444,7 @@ def optimize_dividend_regularity():
                         ui.create_metric_card(
                             "Coef. Variação",
                             f"{cv:.3f}",
-                            help_text="Quanto menor, mais regular",
+                            help_text="Menor = mais regular",
                             icon="📊"
                         )
                     
@@ -533,18 +458,18 @@ def optimize_dividend_regularity():
                 st.rerun()
             
             except Exception as e:
-                logger.error(f"Erro na otimização de dividendos: {e}")
-                st.error(f"❌ Erro na otimização: {e}")
+                logger.error(f"Erro: {e}")
+                st.error(f"❌ Erro: {e}")
 
 
-def show_portfolio_metrics(stats: dict, weights: dict, portfolio_name: str, include_dividends: bool = False):
+def show_portfolio_metrics(stats: dict, weights: dict, name: str, include_dividends: bool = False):
     """Exibe métricas de um portfólio."""
     
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         ui.create_metric_card(
-            "Retorno Esperado",
+            "Retorno",
             f"{stats['expected_return']*100:.2f}%",
             icon="📈"
         )
@@ -558,14 +483,14 @@ def show_portfolio_metrics(stats: dict, weights: dict, portfolio_name: str, incl
     
     with col3:
         ui.create_metric_card(
-            "Sharpe Ratio",
+            "Sharpe",
             f"{stats['sharpe_ratio']:.3f}",
             icon="⭐"
         )
     
     with col4:
         ui.create_metric_card(
-            "Nº de Ativos",
+            "Nº Ativos",
             f"{stats['num_assets']}",
             icon="🎯"
         )
@@ -589,48 +514,39 @@ def show_portfolio_metrics(stats: dict, weights: dict, portfolio_name: str, incl
         
         with col3:
             ui.create_metric_card(
-                "Volatilidade Divs",
+                "Vol. Divs",
                 f"{stats.get('dividend_volatility', 0):.4f}",
-                help_text="Desvio padrão dos fluxos mensais",
+                help_text="Desvio padrão dos fluxos",
                 icon="📊"
             )
     
     # Alocação
-    st.markdown("### 📊 Alocação do Portfólio")
+    st.markdown("### 📊 Alocação")
     
-    col1, col2 = st.columns(2)
+    col1, col2 = st.columns([1, 1])
     
     with col1:
-        fig = ui.plot_portfolio_weights(weights, f"Alocação - {portfolio_name}")
+        fig = ui.plot_portfolio_weights(weights, name)
         st.plotly_chart(fig, use_container_width=True)
     
     with col2:
         weights_df = pd.DataFrame({
             'Ticker': list(weights.keys()),
             'Peso (%)': [w * 100 for w in weights.values()]
-        })
-        weights_df = weights_df.sort_values('Peso (%)', ascending=False)
+        }).sort_values('Peso (%)', ascending=False)
         
         st.dataframe(weights_df, use_container_width=True, height=400)
 
 
 def compare_specialized_portfolios():
-    """Compara os portfólios especializados."""
+    """Compara portfólios especializados."""
     
     if not st.session_state.specialized_portfolios:
-        ui.create_info_box(
-            "Nenhum portfólio especializado criado ainda. Use as ferramentas acima para otimizar.",
-            "info"
-        )
+        st.info("ℹ️ Nenhum portfólio especializado criado")
         return
     
-    ui.create_section_header(
-        "⚖️ Comparação de Portfólios",
-        "Análise lado a lado dos portfólios especializados",
-        "⚖️"
-    )
+    st.markdown("### ⚖️ Comparação")
     
-    # Criar DataFrame de comparação
     comparison_data = []
     
     for name, portfolio in st.session_state.specialized_portfolios.items():
@@ -645,7 +561,6 @@ def compare_specialized_portfolios():
             'Peso Máx (%)': stats['max_weight'] * 100,
         }
         
-        # Adicionar métricas de dividendos se disponível
         if 'annual_yield' in stats:
             row['DY Anual (%)'] = stats['annual_yield'] * 100
         
@@ -653,19 +568,19 @@ def compare_specialized_portfolios():
     
     comparison_df = pd.DataFrame(comparison_data)
     
-    # Tabela formatada
-    st.markdown("### 📋 Tabela Comparativa")
+    # Tabela
+    st.markdown("#### 📋 Tabela")
     
     display_df = comparison_df.copy()
     
     for col in display_df.columns:
-        if col != 'Portfólio' and col != 'Nº Ativos':
+        if col not in ['Portfólio', 'Nº Ativos']:
             display_df[col] = display_df[col].apply(lambda x: f"{x:.2f}")
     
     st.dataframe(display_df, use_container_width=True)
     
-    # Gráfico scatter
-    st.markdown("### 📊 Risco vs Retorno")
+    # Gráfico
+    st.markdown("#### 📊 Risco vs Retorno")
     
     import plotly.graph_objects as go
     
@@ -687,7 +602,6 @@ def compare_specialized_portfolios():
             name=name,
             text=[name],
             textposition='top center',
-            textfont=dict(size=12, color=ui.COLORS['text']),
             marker=dict(
                 size=20,
                 color=colors.get(name, ui.COLORS['info']),
@@ -695,28 +609,16 @@ def compare_specialized_portfolios():
                 line=dict(width=2, color='white')
             ),
             hovertemplate=f"<b>{name}</b><br>" +
-                         'Retorno: %{y:.2f}%<br>' +
-                         'Volatilidade: %{x:.2f}%<br>' +
-                         f"Sharpe: {row['Sharpe']:.3f}<br>" +
-                         '<extra></extra>'
+                         'Ret: %{y:.2f}%<br>' +
+                         'Vol: %{x:.2f}%<br>' +
+                         f"Sharpe: {row['Sharpe']:.3f}<extra></extra>"
         ))
     
     fig.update_layout(
-        title="Comparação de Portfólios Especializados",
+        title="Comparação de Portfólios",
         xaxis_title="Volatilidade (%)",
         yaxis_title="Retorno (%)",
         template='plotly_dark',
-        hovermode='closest',
-        showlegend=True,
-        legend=dict(
-            yanchor="top",
-            y=0.99,
-            xanchor="left",
-            x=0.01,
-            bgcolor='rgba(38, 39, 48, 0.8)',
-            bordercolor=ui.COLORS['primary'],
-            borderwidth=1
-        ),
         plot_bgcolor=ui.COLORS['background'],
         paper_bgcolor=ui.COLORS['background'],
         font=dict(color=ui.COLORS['text']),
@@ -725,47 +627,46 @@ def compare_specialized_portfolios():
     
     st.plotly_chart(fig, use_container_width=True)
     
-    # Análise detalhada
-    st.markdown("### 🔍 Análise Detalhada")
+    # Detalhes
+    st.markdown("#### 🔍 Detalhes")
     
-    selected_portfolio = st.selectbox(
-        "Selecione um portfólio para ver detalhes:",
-        options=list(st.session_state.specialized_portfolios.keys())
+    selected = st.selectbox(
+        "Selecione:",
+        options=list(st.session_state.specialized_portfolios.keys()),
+        key="comp_portfolio_select"
     )
     
-    if selected_portfolio:
-        portfolio = st.session_state.specialized_portfolios[selected_portfolio]
+    if selected:
+        portfolio = st.session_state.specialized_portfolios[selected]
         weights = portfolio['weights']
         stats = portfolio['stats']
         
         col1, col2 = st.columns(2)
         
         with col1:
-            st.markdown("#### 📊 Composição")
+            st.markdown("##### 📊 Composição")
             
             weights_df = pd.DataFrame({
                 'Ticker': list(weights.keys()),
                 'Peso (%)': [w * 100 for w in weights.values()]
-            })
-            weights_df = weights_df.sort_values('Peso (%)', ascending=False)
+            }).sort_values('Peso (%)', ascending=False)
             
             st.dataframe(weights_df, use_container_width=True, height=400)
         
         with col2:
-            st.markdown("#### 📈 Métricas")
+            st.markdown("##### 📈 Métricas")
             
             metrics_display = {
-                'Retorno Esperado': f"{stats['expected_return']*100:.2f}%",
+                'Retorno': f"{stats['expected_return']*100:.2f}%",
                 'Volatilidade': f"{stats['volatility']*100:.2f}%",
-                'Sharpe Ratio': f"{stats['sharpe_ratio']:.3f}",
-                'Número de Ativos': f"{stats['num_assets']}",
-                'Peso Máximo': f"{stats['max_weight']*100:.2f}%",
-                'Peso Mínimo': f"{stats['min_weight']*100:.2f}%",
-                'Nº Efetivo de Ativos': f"{stats.get('effective_n', 0):.2f}"
+                'Sharpe': f"{stats['sharpe_ratio']:.3f}",
+                'Nº Ativos': f"{stats['num_assets']}",
+                'Peso Máx': f"{stats['max_weight']*100:.2f}%",
+                'Peso Mín': f"{stats['min_weight']*100:.2f}%",
             }
             
             if 'annual_yield' in stats:
-                metrics_display['Dividend Yield Anual'] = f"{stats['annual_yield']*100:.2f}%"
+                metrics_display['DY Anual'] = f"{stats['annual_yield']*100:.2f}%"
             
             for metric, value in metrics_display.items():
                 st.markdown(f"**{metric}:** {value}")
@@ -773,74 +674,42 @@ def compare_specialized_portfolios():
         # Download
         st.markdown("---")
         
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            ui.create_download_button(
-                weights_df,
-                f"{selected_portfolio.replace(' ', '_')}_weights.csv",
-                "📥 Download Alocação",
-                "csv"
-            )
-        
-        with col2:
-            # Criar relatório completo
-            report_data = {
-                'Portfólio': selected_portfolio,
-                **stats,
-                'Pesos': weights
-            }
-            
-            report_df = pd.DataFrame([report_data])
-            
-            ui.create_download_button(
-                report_df,
-                f"{selected_portfolio.replace(' ', '_')}_report.json",
-                "📥 Download Relatório Completo",
-                "json"
-            )
+        csv = weights_df.to_csv(index=False)
+        st.download_button(
+            "📥 Download",
+            csv,
+            f"{selected.replace(' ', '_')}.csv",
+            use_container_width=True,
+            key=f"btn_download_spec_{selected.replace(' ', '_')}"
+        )
 
 
-def show_risk_parity_option():
-    """Opção de criar portfólio Risk Parity."""
+def show_risk_parity():
+    """Risk Parity opcional."""
     
-    ui.create_section_header(
-        "⚖️ Portfólio Risk Parity (Opcional)",
-        "Contribuição igual de risco por ativo",
-        "⚖️"
-    )
+    st.markdown("### ⚖️ Risk Parity (Opcional)")
     
     st.markdown("""
-    O **Portfólio Risk Parity** aloca pesos de forma que cada ativo contribua 
-    igualmente para o risco total do portfólio. É uma alternativa ao equally weighted 
-    que considera as diferenças de volatilidade entre ativos.
+    Contribuição igual de risco por ativo.
     """)
     
-    with st.expander("ℹ️ Como funciona o Risk Parity?", expanded=False):
+    with st.expander("ℹ️ Como funciona?", expanded=False):
         st.markdown("""
-        ### Conceito
+        **Risk Parity:** Ajusta pesos para que cada ativo contribua 
+        igualmente para o risco total.
         
-        Em vez de pesos iguais (1/N), o Risk Parity ajusta os pesos para que:
-
+        **Vantagens:**
+        - Diversificação mais efetiva
+        - Reduz impacto de ativos voláteis
         
-        $$\\text{Contribuição de Risco}_i = \\text{Peso}_i \\times \\text{Risco Marginal}_i$$
-        
-        Todos os ativos contribuem igualmente para a volatilidade total do portfólio.
-        
-        ### Vantagens
-        - Diversificação mais efetiva que equally weighted
-        - Reduz impacto de ativos muito voláteis
-        - Aumenta exposição a ativos menos voláteis
-        
-        ### Desvantagens
-        - Pode concentrar em ativos de baixa volatilidade
+        **Desvantagens:**
         - Ignora retornos esperados
-        - Pode ter turnover alto em rebalanceamentos
+        - Pode concentrar em baixa volatilidade
         """)
     
-    if st.button("⚖️ Criar Portfólio Risk Parity", use_container_width=True):
+    if st.button("⚖️ Criar Risk Parity", use_container_width=True, key="btn_create_rp"):
         
-        with st.spinner("Otimizando Risk Parity..."):
+        with st.spinner("Otimizando..."):
             
             try:
                 optimizer = opt.RiskParityOptimizer(
@@ -852,10 +721,9 @@ def show_risk_parity_option():
                 weights = optimizer.optimize(max_weight=0.50, min_weight=0.0)
                 
                 if not weights:
-                    st.error("❌ Não foi possível otimizar Risk Parity")
+                    st.error("❌ Não foi possível otimizar")
                     return
                 
-                # Calcular estatísticas
                 stats = opt.calculate_portfolio_stats(
                     weights,
                     st.session_state.expected_returns,
@@ -863,58 +731,53 @@ def show_risk_parity_option():
                     st.session_state.risk_free_rate
                 )
                 
-                # Salvar
                 st.session_state.specialized_portfolios['Risk Parity'] = {
                     'weights': weights,
                     'stats': stats,
                     'type': 'risk_parity'
                 }
                 
-                st.success("✅ Portfólio Risk Parity criado!")
+                st.success("✅ Risk Parity criado!")
                 
                 show_portfolio_metrics(stats, weights, "Risk Parity")
                 
                 st.rerun()
             
             except Exception as e:
-                logger.error(f"Erro na otimização Risk Parity: {e}")
-                st.error(f"❌ Erro na otimização: {e}")
+                logger.error(f"Erro: {e}")
+                st.error(f"❌ Erro: {e}")
 
 
 def main():
-    """Função principal da página."""
+    """Função principal."""
     
     initialize_session_state()
     
-    # Header
     st.markdown('<p class="gradient-title">🎯 Sharpe e MinVol</p>', unsafe_allow_html=True)
     
     st.markdown("""
-    Portfólios especializados com objetivos específicos: **Máximo Sharpe** (eficiência), 
-    **Mínima Volatilidade** (conservadorismo) e **Dividendos Regulares** (renda mensal).
+    Portfólios especializados: **Máximo Sharpe**, **Mínima Volatilidade** e **Dividendos Regulares**.
     """)
     
-    # Verificar pré-requisitos
     if not check_prerequisites():
         st.stop()
     
-    # Informações
-    col1, col2 = st.columns([2, 1])
+    col1, col2 = st.columns([3, 1])
     
     with col1:
-        st.info(f"📊 **{len(st.session_state.selected_tickers)} ativos** disponíveis para otimização")
+        st.info(f"📊 {len(st.session_state.selected_tickers)} ativos")
     
     with col2:
-        if st.button("🔙 Voltar", use_container_width=True):
-            st.switch_page("app/pages/03_Portfólios_Eficientes.py")
+        if st.button("🔙 Voltar", use_container_width=True, key="btn_back_page4"):
+            st.info("👈 Use o menu lateral")
     
     st.markdown("---")
     
-    # Tabs principais
+    # Tabs
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "⭐ Máximo Sharpe",
-        "🛡️ Mínima Volatilidade",
-        "💸 Dividendos Regulares",
+        "⭐ Sharpe",
+        "🛡️ MinVol",
+        "💸 Dividendos",
         "⚖️ Risk Parity",
         "📊 Comparação"
     ])
@@ -929,33 +792,17 @@ def main():
         optimize_dividend_regularity()
     
     with tab4:
-        show_risk_parity_option()
+        show_risk_parity()
     
     with tab5:
         compare_specialized_portfolios()
     
-    # Próximos passos
+    # Próximos
     st.markdown("---")
-    
-    ui.create_section_header(
-        "🚀 Próximos Passos",
-        "Finalize com o resumo executivo",
-        "🚀"
-    )
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        if st.button("📋 Resumo Executivo", use_container_width=True, type="primary"):
-            st.switch_page("app/pages/05_Resumo_Executivo.py")
-    
-    with col2:
-        if st.button("📊 Voltar para Fronteira", use_container_width=True):
-            st.switch_page("app/pages/03_Portfólios_Eficientes.py")
-    
-    with col3:
-        if st.button("💸 Voltar para Dividendos", use_container_width=True):
-            st.switch_page("app/pages/02_Análise_de_Dividendos.py")
+    st.info("""
+    **Finalize:** Menu lateral (☰) →
+    - 📋 Resumo Executivo
+    """)
 
 
 if __name__ == "__main__":
