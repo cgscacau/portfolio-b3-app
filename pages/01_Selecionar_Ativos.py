@@ -9,10 +9,10 @@ import sys
 from pathlib import Path
 
 # Adicionar diretório raiz ao path
-root_dir = Path(__file__).parent.parent.parent
+root_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(root_dir))
 
-from core import data, filters, ui
+from core import data, filters, ui, utils
 import logging
 
 logger = logging.getLogger(__name__)
@@ -27,17 +27,7 @@ st.set_page_config(
 
 def initialize_session_state():
     """Inicializa variáveis de sessão se não existirem."""
-    if 'selected_tickers' not in st.session_state:
-        st.session_state.selected_tickers = []
-    
-    if 'universe_df' not in st.session_state:
-        st.session_state.universe_df = pd.DataFrame()
-    
-    if 'filtered_universe_df' not in st.session_state:
-        st.session_state.filtered_universe_df = pd.DataFrame()
-    
-    if 'liquidity_applied' not in st.session_state:
-        st.session_state.liquidity_applied = False
+    utils.ensure_session_state_initialized()
 
 
 def load_universe():
@@ -71,6 +61,15 @@ def apply_liquidity_filter():
         st.warning("⚠️ Carregue o universo de ativos primeiro")
         return
     
+    # Obter modo de operação
+    use_mock = utils.get_use_mock_flag()
+    
+    # Mostrar modo atual
+    if use_mock:
+        st.info("🎲 Modo simulado ativo - Liquidez será gerada aleatoriamente")
+    else:
+        st.info("📡 Modo real - Verificando liquidez via yfinance")
+    
     # Explicação dos valores
     with st.expander("ℹ️ Como interpretar o volume?", expanded=False):
         st.markdown("""
@@ -87,6 +86,9 @@ def apply_liquidity_filter():
         - PETR4, VALE3, ITUB4: 100-500 milhões de ações/dia
         - Ações médias: 1-10 milhões de ações/dia
         - Small caps: < 1 milhão de ações/dia
+        
+        **Nota:** Em modo simulado, os valores são gerados aleatoriamente 
+        baseados em características conhecidas dos ativos.
         """)
     
     col1, col2 = st.columns(2)
@@ -113,7 +115,7 @@ def apply_liquidity_filter():
                 "Muito Alta - Blue Chips (> 50.000.000)",
                 "Personalizado"
             ],
-            index=2,  # Padrão: Média
+            index=1,  # Padrão: Baixa
             help="Selecione o nível de liquidez mínimo"
         )
         
@@ -131,8 +133,8 @@ def apply_liquidity_filter():
                 "Volume médio mínimo (ações/dia):",
                 min_value=1000,
                 max_value=1000000000,
-                value=1000000,
-                step=100000,
+                value=100000,
+                step=10000,
                 format="%d",
                 help="Volume médio diário mínimo em número de ações"
             )
@@ -140,65 +142,83 @@ def apply_liquidity_filter():
             min_volume = liquidity_map[liquidity_level]
             st.info(f"📊 Volume mínimo: **{min_volume:,.0f}** ações/dia")
     
-    if st.button("🔍 Aplicar Filtro de Liquidez", use_container_width=True, type="primary", key="apply_liquidity"):
-        
-        with st.spinner("Verificando liquidez dos ativos... Isso pode levar alguns minutos."):
+    # Opção rápida: usar todos sem verificar
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("⚡ Usar Todos os Ativos (Sem Filtro)", use_container_width=True, key="skip_liquidity"):
+            # Marcar todos como negociados
+            universe_df['is_traded_30d'] = True
+            universe_df['avg_volume_30d'] = 1000000  # Valor placeholder
+            universe_df['sessions_traded_30d'] = 20
             
-            filtered_df = data.filter_traded_last_30d(
-                universe_df,
-                min_sessions=min_sessions,
-                min_avg_volume=min_volume,
-                show_progress=True
-            )
-            
-            # Filtrar apenas os negociados
-            traded_df = filtered_df[filtered_df['is_traded_30d'] == True].copy()
-            
-            st.session_state.filtered_universe_df = traded_df
+            st.session_state.filtered_universe_df = universe_df
             st.session_state.liquidity_applied = True
             
-            # Estatísticas detalhadas
-            col1, col2, col3, col4 = st.columns(4)
+            st.success(f"✅ {len(universe_df)} ativos disponíveis (sem verificação de liquidez)")
+            st.info("ℹ️ Todos os ativos foram incluídos sem verificar liquidez real")
+            st.rerun()
+    
+    with col2:
+        if st.button("🔍 Aplicar Filtro de Liquidez", use_container_width=True, type="primary", key="apply_liquidity"):
             
-            with col1:
-                st.metric("Total no Universo", len(universe_df))
-            
-            with col2:
-                st.metric("Ativos Líquidos", len(traded_df))
-            
-            with col3:
-                pct = (len(traded_df) / len(universe_df) * 100) if len(universe_df) > 0 else 0
-                st.metric("% Aprovado", f"{pct:.1f}%")
-            
-            with col4:
+            with st.spinner("Verificando liquidez dos ativos..."):
+                
+                filtered_df = data.filter_traded_last_30d(
+                    universe_df,
+                    min_sessions=min_sessions,
+                    min_avg_volume=min_volume,
+                    show_progress=True,
+                    use_mock=use_mock  # Passar flag de mock
+                )
+                
+                # Filtrar apenas os negociados
+                traded_df = filtered_df[filtered_df['is_traded_30d'] == True].copy()
+                
+                st.session_state.filtered_universe_df = traded_df
+                st.session_state.liquidity_applied = True
+                
+                # Estatísticas detalhadas
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.metric("Total no Universo", len(universe_df))
+                
+                with col2:
+                    st.metric("Ativos Líquidos", len(traded_df))
+                
+                with col3:
+                    pct = (len(traded_df) / len(universe_df) * 100) if len(universe_df) > 0 else 0
+                    st.metric("% Aprovado", f"{pct:.1f}%")
+                
+                with col4:
+                    if len(traded_df) > 0:
+                        avg_vol = traded_df['avg_volume_30d'].mean()
+                        st.metric("Volume Médio", f"{avg_vol/1e6:.1f}M")
+                    else:
+                        st.metric("Volume Médio", "N/A")
+                
                 if len(traded_df) > 0:
-                    avg_vol = traded_df['avg_volume_30d'].mean()
-                    st.metric("Volume Médio", f"{avg_vol/1e6:.1f}M")
+                    st.success(f"✅ {len(traded_df)} ativos líquidos identificados!")
+                    
+                    # Mostrar top 10 mais líquidos
+                    with st.expander("🔥 Top 10 Mais Líquidos", expanded=False):
+                        top10 = traded_df.nlargest(10, 'avg_volume_30d')[
+                            ['ticker', 'nome', 'avg_volume_30d', 'sessions_traded_30d']
+                        ].copy()
+                        
+                        top10['avg_volume_30d'] = top10['avg_volume_30d'].apply(
+                            lambda x: f"{x/1e6:.2f}M ações/dia"
+                        )
+                        
+                        top10.columns = ['Ticker', 'Nome', 'Volume Médio', 'Sessões']
+                        
+                        st.dataframe(top10, use_container_width=True)
                 else:
-                    st.metric("Volume Médio", "N/A")
-            
-            if len(traded_df) > 0:
-                st.success(f"✅ {len(traded_df)} ativos líquidos identificados!")
-                
-                # Mostrar top 10 mais líquidos
-                with st.expander("🔥 Top 10 Mais Líquidos", expanded=False):
-                    top10 = traded_df.nlargest(10, 'avg_volume_30d')[
-                        ['ticker', 'nome', 'avg_volume_30d', 'sessions_traded_30d']
-                    ].copy()
+                    st.warning("⚠️ Nenhum ativo atende aos critérios de liquidez. Tente reduzir os limites.")
                     
-                    top10['avg_volume_30d'] = top10['avg_volume_30d'].apply(
-                        lambda x: f"{x/1e6:.2f}M ações/dia"
-                    )
-                    
-                    top10.columns = ['Ticker', 'Nome', 'Volume Médio', 'Sessões']
-                    
-                    st.dataframe(top10, use_container_width=True)
-            else:
-                st.warning("⚠️ Nenhum ativo atende aos critérios de liquidez. Tente reduzir os limites.")
-                
-                # Sugestão automática
-                if min_volume > 100000:
-                    st.info(f"💡 Sugestão: Tente com volume mínimo de 100.000 ações/dia")
+                    if min_volume > 100000:
+                        st.info(f"💡 Sugestão: Tente com volume mínimo de 100.000 ações/dia")
 
 
 def show_simple_filters():
@@ -209,7 +229,7 @@ def show_simple_filters():
     # Usar universo filtrado se disponível, senão usar completo
     if not st.session_state.filtered_universe_df.empty:
         working_df = st.session_state.filtered_universe_df
-        st.info(f"📊 Trabalhando com {len(working_df)} ativos líquidos")
+        st.info(f"📊 Trabalhando com {len(working_df)} ativos filtrados por liquidez")
     elif not st.session_state.universe_df.empty:
         working_df = st.session_state.universe_df
         st.warning("⚠️ Usando universo completo. Recomendamos aplicar o filtro de liquidez primeiro.")
@@ -227,7 +247,8 @@ def show_simple_filters():
             "Selecione setores:",
             options=all_sectors,
             default=[],
-            key="filter_sectors"
+            key="filter_sectors",
+            help="Filtre por setores específicos da economia"
         )
     
     with col2:
@@ -237,7 +258,8 @@ def show_simple_filters():
             "Selecione tipos:",
             options=all_types,
             default=[],
-            key="filter_types"
+            key="filter_types",
+            help="ON (Ordinária), PN (Preferencial), UNIT, etc."
         )
     
     # Aplicar filtros
@@ -288,6 +310,7 @@ def show_simple_filters():
     with col1:
         if st.button("✅ Selecionar Todos", use_container_width=True, key="select_all"):
             st.session_state.selected_tickers = filtered['ticker'].tolist()
+            utils.log_user_action("Selecionados todos os ativos filtrados", {"count": len(st.session_state.selected_tickers)})
             st.success(f"✅ {len(st.session_state.selected_tickers)} ativos selecionados!")
             st.rerun()
     
@@ -296,7 +319,8 @@ def show_simple_filters():
             if 'avg_volume_30d' in filtered.columns:
                 top = filtered.nlargest(20, 'avg_volume_30d')
                 st.session_state.selected_tickers = top['ticker'].tolist()
-                st.success(f"✅ {len(st.session_state.selected_tickers)} ativos selecionados!")
+                utils.log_user_action("Selecionados top 20 por liquidez", {"count": len(st.session_state.selected_tickers)})
+                st.success(f"✅ {len(st.session_state.selected_tickers)} ativos mais líquidos selecionados!")
                 st.rerun()
             else:
                 st.warning("⚠️ Aplique o filtro de liquidez primeiro")
@@ -306,12 +330,14 @@ def show_simple_filters():
             sample_size = min(10, len(filtered))
             random_sample = filtered.sample(n=sample_size)
             st.session_state.selected_tickers = random_sample['ticker'].tolist()
-            st.success(f"✅ {len(st.session_state.selected_tickers)} ativos selecionados!")
+            utils.log_user_action("Selecionados aleatoriamente", {"count": len(st.session_state.selected_tickers)})
+            st.success(f"✅ {len(st.session_state.selected_tickers)} ativos selecionados aleatoriamente!")
             st.rerun()
     
     with col4:
         if st.button("🗑️ Limpar", use_container_width=True, key="clear_selection"):
             st.session_state.selected_tickers = []
+            utils.log_user_action("Seleção limpa")
             st.success("✅ Seleção limpa!")
             st.rerun()
 
@@ -324,8 +350,10 @@ def show_manual_selection():
     # Usar universo apropriado
     if not st.session_state.filtered_universe_df.empty:
         working_df = st.session_state.filtered_universe_df
+        st.info("📊 Selecionando de ativos filtrados por liquidez")
     elif not st.session_state.universe_df.empty:
         working_df = st.session_state.universe_df
+        st.warning("⚠️ Selecionando de universo completo (sem filtro de liquidez)")
     else:
         st.error("❌ Nenhum dado disponível")
         return
@@ -334,25 +362,39 @@ def show_manual_selection():
     
     # Criar opções com nome
     ticker_options = []
+    ticker_map = {}
+    
     for ticker in available_tickers:
         nome = working_df[working_df['ticker'] == ticker]['nome'].iloc[0]
-        ticker_options.append(f"{ticker} - {nome}")
+        option = f"{ticker} - {nome}"
+        ticker_options.append(option)
+        ticker_map[option] = ticker
+    
+    # Pré-selecionar os já selecionados
+    default_options = []
+    for ticker in st.session_state.selected_tickers:
+        if ticker in working_df['ticker'].values:
+            nome = working_df[working_df['ticker'] == ticker]['nome'].iloc[0]
+            default_options.append(f"{ticker} - {nome}")
     
     selected_options = st.multiselect(
         "Digite ou selecione tickers:",
         options=ticker_options,
-        default=[f"{t} - {working_df[working_df['ticker'] == t]['nome'].iloc[0]}" 
-                for t in st.session_state.selected_tickers 
-                if t in working_df['ticker'].values],
-        key="manual_select"
+        default=default_options,
+        key="manual_select",
+        help="Busque por ticker ou nome da empresa"
     )
     
     # Extrair apenas os tickers
-    selected_tickers = [opt.split(' - ')[0] for opt in selected_options]
+    selected_tickers = [ticker_map[opt] for opt in selected_options]
+    
+    # Mostrar contagem
+    st.info(f"📊 {len(selected_tickers)} ativos selecionados")
     
     if st.button("💾 Salvar Seleção Manual", use_container_width=True, type="primary", key="save_manual"):
         st.session_state.selected_tickers = selected_tickers
-        st.success(f"✅ {len(selected_tickers)} ativos selecionados!")
+        utils.log_user_action("Seleção manual salva", {"count": len(selected_tickers)})
+        st.success(f"✅ {len(selected_tickers)} ativos salvos!")
         st.rerun()
 
 
@@ -362,7 +404,7 @@ def show_current_selection():
     st.markdown("### ✅ Seleção Atual")
     
     if not st.session_state.selected_tickers:
-        st.info("ℹ️ Nenhum ativo selecionado ainda")
+        st.info("ℹ️ Nenhum ativo selecionado ainda. Use as abas acima para selecionar.")
         return
     
     # Métricas
@@ -396,26 +438,48 @@ def show_current_selection():
         else:
             st.metric("Maior Concentração", "N/A")
     
+    # Validação de diversificação
+    if not st.session_state.universe_df.empty:
+        is_valid, concentration = filters.validate_sector_diversification(
+            st.session_state.selected_tickers,
+            st.session_state.universe_df,
+            max_sector_pct=40.0
+        )
+        
+        if not is_valid:
+            max_sector = max(concentration, key=concentration.get)
+            max_pct = concentration[max_sector]
+            
+            st.warning(f"""
+            ⚠️ **Alerta de Concentração Setorial**
+            
+            O setor **{max_sector}** representa {max_pct:.1f}% da carteira, 
+            acima do limite recomendado de 40%.
+            
+            **Recomendação:** Considere adicionar ativos de outros setores para 
+            melhorar a diversificação e reduzir risco idiossincrático.
+            """)
+    
     # Lista
-    st.markdown("**Tickers Selecionados:**")
+    st.markdown("**Ativos Selecionados:**")
     
     if not st.session_state.universe_df.empty:
         selected_df = st.session_state.universe_df[
             st.session_state.universe_df['ticker'].isin(st.session_state.selected_tickers)
-        ][['ticker', 'nome', 'setor', 'tipo']]
+        ][['ticker', 'nome', 'setor', 'tipo']].copy()
         
         selected_df.columns = ['Ticker', 'Nome', 'Setor', 'Tipo']
         st.dataframe(selected_df, use_container_width=True, height=300)
     else:
         st.write(", ".join(st.session_state.selected_tickers))
     
-    # Exportar
-    col1, col2 = st.columns(2)
+    # Ações
+    col1, col2, col3 = st.columns(3)
     
     with col1:
         tickers_text = "\n".join(st.session_state.selected_tickers)
         st.download_button(
-            "📥 Exportar Lista",
+            "📥 Exportar Lista (TXT)",
             tickers_text,
             "selected_tickers.txt",
             "text/plain",
@@ -423,10 +487,78 @@ def show_current_selection():
         )
     
     with col2:
+        if not st.session_state.universe_df.empty:
+            selected_full = st.session_state.universe_df[
+                st.session_state.universe_df['ticker'].isin(st.session_state.selected_tickers)
+            ]
+            csv = selected_full.to_csv(index=False)
+            
+            st.download_button(
+                "📥 Exportar Lista (CSV)",
+                csv,
+                "selected_tickers.csv",
+                "text/csv",
+                use_container_width=True
+            )
+    
+    with col3:
         if st.button("🗑️ Limpar Tudo", use_container_width=True, key="clear_all"):
             st.session_state.selected_tickers = []
+            utils.log_user_action("Seleção limpa completamente")
             st.success("✅ Seleção limpa!")
             st.rerun()
+
+
+def show_statistics():
+    """Mostra estatísticas do universo."""
+    
+    st.markdown("### 📊 Estatísticas do Universo")
+    
+    universe_df = st.session_state.universe_df
+    
+    if universe_df.empty:
+        st.info("ℹ️ Carregue os dados para ver as estatísticas")
+        return
+    
+    # Métricas gerais
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Total de Ativos", len(universe_df))
+    
+    with col2:
+        st.metric("Setores Únicos", universe_df['setor'].nunique())
+    
+    with col3:
+        st.metric("Subsetores", universe_df['subsetor'].nunique())
+    
+    with col4:
+        st.metric("Segmentos", universe_df['segmento_listagem'].nunique())
+    
+    # Distribuições
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("#### Distribuição por Setor")
+        sector_counts = universe_df['setor'].value_counts()
+        st.bar_chart(sector_counts)
+    
+    with col2:
+        st.markdown("#### Distribuição por Tipo")
+        type_counts = universe_df['tipo'].value_counts()
+        st.bar_chart(type_counts)
+    
+    # Tabela detalhada
+    with st.expander("📋 Tabela Detalhada por Setor"):
+        sector_summary = universe_df.groupby('setor').agg({
+            'ticker': 'count',
+            'subsetor': 'nunique'
+        }).reset_index()
+        
+        sector_summary.columns = ['Setor', 'Nº Ativos', 'Nº Subsetores']
+        sector_summary = sector_summary.sort_values('Nº Ativos', ascending=False)
+        
+        st.dataframe(sector_summary, use_container_width=True)
 
 
 def main():
@@ -443,6 +575,9 @@ def main():
     por setor, liquidez e outros critérios, ou fazer seleção manual.
     """)
     
+    # Mostrar modo de operação
+    utils.show_data_mode_indicator()
+    
     # Carregar universo se necessário
     if st.session_state.universe_df.empty:
         with st.spinner("Carregando universo de ativos..."):
@@ -451,6 +586,8 @@ def main():
             if universe_df.empty:
                 st.error("❌ Não foi possível carregar o universo de ativos")
                 st.stop()
+    
+    st.markdown("---")
     
     # Tabs
     tab1, tab2, tab3, tab4 = st.tabs([
@@ -470,7 +607,7 @@ def main():
         if st.session_state.liquidity_applied or not st.session_state.universe_df.empty:
             show_simple_filters()
         else:
-            st.info("ℹ️ Aplique o filtro de liquidez acima para começar")
+            st.info("ℹ️ Aplique o filtro de liquidez acima ou use 'Todos os Ativos' para começar")
     
     with tab2:
         show_manual_selection()
@@ -479,53 +616,30 @@ def main():
         show_current_selection()
     
     with tab4:
-        st.markdown("### 📊 Estatísticas do Universo")
-        
-        universe_df = st.session_state.universe_df
-        
-        if not universe_df.empty:
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                st.metric("Total de Ativos", len(universe_df))
-            
-            with col2:
-                st.metric("Setores Únicos", universe_df['setor'].nunique())
-            
-            with col3:
-                st.metric("Subsetores", universe_df['subsetor'].nunique())
-            
-            with col4:
-                st.metric("Segmentos", universe_df['segmento_listagem'].nunique())
-            
-            # Distribuição por setor
-            st.markdown("#### Distribuição por Setor")
-            sector_counts = universe_df['setor'].value_counts()
-            st.bar_chart(sector_counts)
-        else:
-            st.info("ℹ️ Carregue os dados para ver as estatísticas")
+        show_statistics()
     
     # Próximos passos
     if st.session_state.selected_tickers:
         st.markdown("---")
         st.markdown("### 🚀 Próximos Passos")
         
-        col1, col2, col3 = st.columns(3)
+        st.success(f"✅ {len(st.session_state.selected_tickers)} ativos prontos para análise!")
         
-        with col1:
-            st.info("💸 Continue para **Análise de Dividendos** →")
+        st.info("""
+        **Continue sua análise:**
         
-        with col2:
-            st.info("📊 Ou vá direto para **Portfólios Eficientes** →")
-        
-        with col3:
-            st.info("📋 Ou veja o **Resumo Executivo** →")
+        Use o menu lateral (☰) para navegar até:
+        - 💸 **Análise de Dividendos** - Histórico e regularidade de pagamentos
+        - 📊 **Portfólios Eficientes** - Otimização via Markowitz
+        - 🎯 **Sharpe e MinVol** - Carteiras especializadas
+        - 📋 **Resumo Executivo** - Recomendação final
+        """)
     
     # Footer
     st.markdown("---")
     st.markdown("""
         <div style="text-align: center; color: #666; padding: 1rem 0;">
-            <p>💡 Dica: Selecione entre 10-30 ativos para uma análise balanceada entre diversificação e complexidade.</p>
+            <p>💡 Dica: Selecione entre 10-30 ativos para análise balanceada entre diversificação e complexidade.</p>
         </div>
     """, unsafe_allow_html=True)
 
