@@ -951,4 +951,7 @@ st.markdown("""
 - **FIIs:** Terminam em 11 (ex: HGLG11, KNRI11)  
 - **ETFs:** Estrutura diferente (ex: BOVA11, SMAL11)
 
-**✍️ Manual:** Digite um ticker por linha:
+**✍️ Manual:** Digite um ticker por linha ou separados por vírgula
+
+⚠️ **Aviso Legal:** Esta é uma ferramenta de análise técnica educacional. Não constitui recomendação de investimento. Mercados financeiros envolvem risco de perda. Sempre consulte um profissional qualificado antes de investir.
+""")
