@@ -514,31 +514,41 @@ def main():
         
         if not weights_sharpe or not weights_minvol:
             st.stop()
-            # Salvar no session_state para uso em outras páginas
-            st.session_state.portfolios_otimizados = {
-                'sharpe_maximo': {
-                    'tickers': list(weights_sharpe.keys()),
-                    'pesos': list(weights_sharpe.values()),
-                    'metricas': metrics_sharpe,
-                    'data_calculo': datetime.now(),
-                    'periodo': {
-                        'inicio': st.session_state.period_start,
-                        'fim': st.session_state.period_end
-                    }
+        
+        # ==========================================
+        # SALVAR NO SESSION_STATE PARA PÁGINA 06
+        # ==========================================
+        
+        st.session_state.portfolios_otimizados = {
+            'sharpe_maximo': {
+                'tickers': list(weights_sharpe.keys()),
+                'pesos': list(weights_sharpe.values()),
+                'metricas': metrics_sharpe,
+                'data_calculo': datetime.now(),
+                'periodo': {
+                    'inicio': st.session_state.period_start,
+                    'fim': st.session_state.period_end
                 },
-                'minima_volatilidade': {
-                    'tickers': list(weights_minvol.keys()),
-                    'pesos': list(weights_minvol.values()),
-                    'metricas': metrics_minvol,
-                    'data_calculo': datetime.now(),
-                    'periodo': {
-                        'inicio': st.session_state.period_start,
-                        'fim': st.session_state.period_end
-                    }
-                }
+                'rf_rate': rf_rate
+            },
+            'minima_volatilidade': {
+                'tickers': list(weights_minvol.keys()),
+                'pesos': list(weights_minvol.values()),
+                'metricas': metrics_minvol,
+                'data_calculo': datetime.now(),
+                'periodo': {
+                    'inicio': st.session_state.period_start,
+                    'fim': st.session_state.period_end
+                },
+                'rf_rate': 0.0
             }
-
-     
+        }
+        
+        st.success("💾 Portfólios salvos para comparação na página 'Gestão de Portfólios'")
+        
+        # ==========================================
+        # FIM DA SEÇÃO DE SALVAMENTO
+        # ==========================================
         
         st.markdown("---")
         
