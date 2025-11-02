@@ -359,7 +359,8 @@ def main():
         # Cache info
         from core.cache import info_cache
         cache_info = info_cache()
-        if cache_info['entries'] > 0:
+        if cache_info['stats']['data_requests'] > 0:
+
             st.success(f"📦 {cache_info['entries']} cache(s)")
             if st.button("🗑️ Limpar Cache"):
                 from core.cache import limpar_cache
