@@ -162,6 +162,10 @@ class CacheStats:
     """Classe para monitorar estatísticas de cache"""
     
     def __init__(self):
+        self._inicializar_stats()
+    
+    def _inicializar_stats(self):
+        """Inicializa stats no session_state se não existir"""
         if 'cache_stats' not in st.session_state:
             st.session_state.cache_stats = {
                 'hits': 0,
@@ -172,18 +176,22 @@ class CacheStats:
     
     def registrar_hit(self):
         """Registra um cache hit"""
+        self._inicializar_stats()
         st.session_state.cache_stats['hits'] += 1
     
     def registrar_miss(self):
         """Registra um cache miss"""
+        self._inicializar_stats()
         st.session_state.cache_stats['misses'] += 1
     
     def registrar_request(self):
         """Registra uma requisição de dados"""
+        self._inicializar_stats()
         st.session_state.cache_stats['data_requests'] += 1
     
     def obter_taxa_acerto(self) -> float:
         """Calcula taxa de acerto do cache"""
+        self._inicializar_stats()
         total = st.session_state.cache_stats['hits'] + st.session_state.cache_stats['misses']
         if total == 0:
             return 0.0
@@ -191,6 +199,7 @@ class CacheStats:
     
     def obter_estatisticas(self) -> Dict[str, Any]:
         """Retorna estatísticas completas"""
+        self._inicializar_stats()
         stats = st.session_state.cache_stats.copy()
         stats['hit_rate'] = self.obter_taxa_acerto()
         return stats
@@ -204,6 +213,7 @@ class CacheStats:
             'data_requests': 0
         }
         logger.info("Estatísticas de cache resetadas")
+
 
 
 # ==========================================
