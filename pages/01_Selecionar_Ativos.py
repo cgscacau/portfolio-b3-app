@@ -20,16 +20,17 @@ st.set_page_config(
 )
 
 
-def inicializar_session_state():
-    """Inicializa variáveis do session_state"""
-    if 'universe_df' not in st.session_state:
-        st.session_state.universe_df = pd.DataFrame()
-    
-    if 'selected_tickers' not in st.session_state:
-        st.session_state.selected_tickers = []
-    
-    if 'portfolio_tickers' not in st.session_state:
-        st.session_state.portfolio_tickers = []
+# ==========================================
+# INICIALIZAÇÃO NO NÍVEL DO MÓDULO
+# ==========================================
+if 'universe_df' not in st.session_state:
+    st.session_state.universe_df = pd.DataFrame()
+
+if 'selected_tickers' not in st.session_state:
+    st.session_state.selected_tickers = []
+
+if 'portfolio_tickers' not in st.session_state:
+    st.session_state.portfolio_tickers = []
 
 
 def carregar_universo_b3():
@@ -264,22 +265,19 @@ def exibir_ativos_selecionados():
 def main():
     """Função principal"""
     
-    # Inicializar session state
-    inicializar_session_state()
-    
     # Título
     st.title("📊 Seleção de Ativos")
     st.markdown("Selecione os ativos que deseja acompanhar no seu portfólio.")
     st.markdown("---")
     
-    # Carregar universo
+    # Carregar universo se vazio (session_state já foi inicializado no topo)
     if st.session_state.universe_df.empty:
         with st.spinner("Carregando universo de ativos..."):
             st.session_state.universe_df = carregar_universo_b3()
     
     # Verificar se carregou
     if st.session_state.universe_df.empty:
-        st.error("❌ Não foi possível carregar os ativos. Verifique o arquivo b3_universe.csv")
+        st.error("❌ Não foi possível carregar os ativos.")
         st.stop()
     
     # Exibir seletor
