@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 import time
 import logging
 from typing import Optional, Dict, Any, List
+import streamlit as st
 
 # Configuração de logging
 logging.basicConfig(level=logging.INFO)
@@ -351,10 +352,25 @@ class DataManager:
         logger.warning(f"⚠ Nenhum histórico encontrado para {ticker}")
         return pd.DataFrame()
     
-    def get_price_history(self, tickers: List[str], start_date: datetime, end_date: datetime) -> pd.DataFrame:
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def _get_price_history_cached(_self, tickers_tuple: tuple, start_date: datetime, end_date: datetime) -> pd.DataFrame:
         """
-        Busca histórico de preços para múltiplos ativos
-        Função para compatibilidade com código existente
+        Versão com cache da busca de histórico
+        
+        Args:
+            tickers_tuple: Tupla de códigos de ativos (tuple para ser hashable)
+            start_date: Data inicial
+            end_date: Data final
+            
+        Returns:
+            DataFrame com histórico de preços
+        """
+        tickers = list(tickers_tuple)
+        return _self._get_price_history_no_cache(tickers, start_date, end_date)
+    
+    def _get_price_history_no_cache(self, tickers: List[str], start_date: datetime, end_date: datetime) -> pd.DataFrame:
+        """
+        Busca histórico sem cache
         
         Args:
             tickers: Lista de códigos de ativos
@@ -362,7 +378,7 @@ class DataManager:
             end_date: Data final
             
         Returns:
-            DataFrame com histórico de preços (índice: data, colunas: tickers)
+            DataFrame com histórico de preços
         """
         logger.info(f"Buscando histórico para {len(tickers)} ativos de {start_date.date()} até {end_date.date()}")
         
@@ -396,6 +412,27 @@ class DataManager:
         
         logger.warning("⚠ Nenhum dado histórico foi obtido")
         return pd.DataFrame()
+    
+    def get_price_history(self, tickers: List[str], start_date: datetime, end_date: datetime, use_cache: bool = True) -> pd.DataFrame:
+        """
+        Busca histórico de preços para múltiplos ativos
+        Função para compatibilidade com código existente
+        
+        Args:
+            tickers: Lista de códigos de ativos
+            start_date: Data inicial
+            end_date: Data final
+            use_cache: Se deve usar cache (padrão: True)
+            
+        Returns:
+            DataFrame com histórico de preços (índice: data, colunas: tickers)
+        """
+        if use_cache:
+            # Converter lista para tupla para ser hashable no cache
+            tickers_tuple = tuple(sorted(tickers))
+            return self._get_price_history_cached(tickers_tuple, start_date, end_date)
+        else:
+            return self._get_price_history_no_cache(tickers, start_date, end_date)
     
     # ==========================================
     # FUNÇÕES DE BUSCA EM LOTE
@@ -515,9 +552,9 @@ def testar_apis() -> Dict[str, bool]:
 
 
 # Funções para compatibilidade com código existente
-def get_price_history(tickers: List[str], start_date: datetime, end_date: datetime) -> pd.DataFrame:
+def get_price_history(tickers: List[str], start_date: datetime, end_date: datetime, use_cache: bool = True) -> pd.DataFrame:
     """Compatibilidade: busca histórico de preços"""
-    return _data_manager.get_price_history(tickers, start_date, end_date)
+    return _data_manager.get_price_history(tickers, start_date, end_date, use_cache)
 
 
 def get_dividends(ticker: str, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None) -> pd.DataFrame:
