@@ -29,262 +29,248 @@ init_all()
 
 
 # ==========================================
-# UNIVERSO BASE DE ATIVOS B3
+# CARREGAR UNIVERSO B3
 # ==========================================
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def carregar_universo_b3():
     """
-    Carrega universo completo de ativos da B3
+    Carrega universo de ativos do arquivo CSV ou cria padrão
     
     Returns:
         DataFrame com [ticker, nome, setor, segmento, tipo]
     """
-    # Lista expandida de ativos B3 por setor
-    ativos = {
-        'ticker': [],
-        'nome': [],
-        'setor': [],
-        'segmento': [],
-        'tipo': []
-    }
+    csv_path = root_dir / 'assets' / 'b3_universe.csv'
     
-    # SETOR FINANCEIRO
-    financeiro = [
-        ('ITUB4', 'Itaú Unibanco', 'Bancos'),
-        ('BBDC4', 'Bradesco', 'Bancos'),
-        ('BBAS3', 'Banco do Brasil', 'Bancos'),
-        ('SANB11', 'Santander', 'Bancos'),
-        ('BBSE3', 'BB Seguridade', 'Seguros'),
-        ('PSSA3', 'Porto Seguro', 'Seguros'),
-        ('CSAN3', 'Cosan', 'Holding'),
-        ('B3SA3', 'B3', 'Serviços Financeiros'),
-    ]
+    # Tentar carregar do CSV
+    if csv_path.exists():
+        try:
+            df = pd.read_csv(csv_path)
+            
+            # Validar colunas necessárias
+            required_cols = ['ticker', 'nome', 'setor', 'segmento', 'tipo']
+            if all(col in df.columns for col in required_cols):
+                # Limpar dados
+                df['ticker'] = df['ticker'].str.upper().str.strip()
+                df = df.dropna(subset=['ticker'])
+                df = df.drop_duplicates(subset=['ticker'])
+                
+                return df
+        except Exception as e:
+            st.warning(f"⚠️ Erro ao ler CSV: {str(e)}. Usando universo padrão.")
     
-    # SETOR ENERGIA
-    energia = [
-        ('PETR4', 'Petrobras', 'Petróleo e Gás'),
-        ('PETR3', 'Petrobras', 'Petróleo e Gás'),
-        ('PRIO3', 'PetroRio', 'Petróleo e Gás'),
-        ('RRRP3', '3R Petroleum', 'Petróleo e Gás'),
-        ('ELET3', 'Eletrobras', 'Energia Elétrica'),
-        ('ELET6', 'Eletrobras', 'Energia Elétrica'),
-        ('ENBR3', 'Energias BR', 'Energia Elétrica'),
-        ('ENEV3', 'Eneva', 'Energia Elétrica'),
-        ('CPFE3', 'CPFL Energia', 'Energia Elétrica'),
-        ('CMIG4', 'Cemig', 'Energia Elétrica'),
-        ('TAEE11', 'Taesa', 'Energia Elétrica'),
-        ('TRPL4', 'Transmissão Paulista', 'Energia Elétrica'),
-    ]
+    # Se não conseguiu carregar, criar universo padrão
+    return criar_universo_padrao()
+
+
+def criar_universo_padrao():
+    """
+    Cria universo padrão de ativos caso CSV não exista
     
-    # SETOR MATERIAIS BÁSICOS
-    materiais = [
-        ('VALE3', 'Vale', 'Mineração'),
-        ('CSNA3', 'CSN', 'Siderurgia'),
-        ('GGBR4', 'Gerdau', 'Siderurgia'),
-        ('GOAU4', 'Gerdau Metalúrgica', 'Siderurgia'),
-        ('USIM5', 'Usiminas', 'Siderurgia'),
-        ('SUZB3', 'Suzano', 'Papel e Celulose'),
-    ]
+    Returns:
+        DataFrame com ativos padrão
+    """
+    ativos = []
     
-    # SETOR CONSUMO
-    consumo = [
-        ('ABEV3', 'Ambev', 'Bebidas'),
-        ('SMTO3', 'São Martinho', 'Alimentos'),
-        ('BEEF3', 'Minerva', 'Alimentos'),
-        ('JBSS3', 'JBS', 'Alimentos'),
-        ('MRFG3', 'Marfrig', 'Alimentos'),
-        ('PCAR3', 'GPA', 'Varejo'),
-        ('LREN3', 'Lojas Renner', 'Varejo'),
-        ('AMER3', 'Lojas Americanas', 'Varejo'),
-        ('MGLU3', 'Magazine Luiza', 'Varejo'),
-        ('VIIA3', 'Via', 'Varejo'),
-        ('CRFB3', 'Carrefour Brasil', 'Varejo'),
-        ('ASAI3', 'Assaí', 'Varejo'),
-    ]
+    # FINANCEIRO
+    ativos.extend([
+        ('ITUB4', 'Itaú Unibanco', 'Financeiro', 'Bancos', 'ACAO'),
+        ('BBDC4', 'Bradesco', 'Financeiro', 'Bancos', 'ACAO'),
+        ('BBAS3', 'Banco do Brasil', 'Financeiro', 'Bancos', 'ACAO'),
+        ('SANB11', 'Santander', 'Financeiro', 'Bancos', 'ACAO'),
+        ('BBSE3', 'BB Seguridade', 'Financeiro', 'Seguros', 'ACAO'),
+        ('B3SA3', 'B3', 'Financeiro', 'Serviços Financeiros', 'ACAO'),
+    ])
     
-    # SETOR SAÚDE
-    saude = [
-        ('RADL3', 'Raia Drogasil', 'Farmácias'),
-        ('PNVL3', 'Dasa', 'Serviços Médicos'),
-        ('HAPV3', 'Hapvida', 'Saúde'),
-        ('FLRY3', 'Fleury', 'Serviços Médicos'),
-    ]
+    # ENERGIA
+    ativos.extend([
+        ('PETR4', 'Petrobras PN', 'Energia', 'Petróleo e Gás', 'ACAO'),
+        ('PETR3', 'Petrobras ON', 'Energia', 'Petróleo e Gás', 'ACAO'),
+        ('PRIO3', 'PetroRio', 'Energia', 'Petróleo e Gás', 'ACAO'),
+        ('ELET3', 'Eletrobras', 'Energia', 'Energia Elétrica', 'ACAO'),
+        ('ELET6', 'Eletrobras PNB', 'Energia', 'Energia Elétrica', 'ACAO'),
+        ('ENBR3', 'Energias BR', 'Energia', 'Energia Elétrica', 'ACAO'),
+        ('CPFE3', 'CPFL Energia', 'Energia', 'Energia Elétrica', 'ACAO'),
+        ('TAEE11', 'Taesa', 'Energia', 'Energia Elétrica', 'ACAO'),
+    ])
     
-    # SETOR INDUSTRIAL
-    industrial = [
-        ('WEGE3', 'WEG', 'Máquinas e Equipamentos'),
-        ('EMBR3', 'Embraer', 'Aeronáutica'),
-        ('RAIZ4', 'Raízen', 'Combustíveis'),
-        ('RAIL3', 'Rumo', 'Transporte'),
-        ('CCRO3', 'CCR', 'Concessões'),
-        ('CPLE6', 'Copel', 'Energia'),
-    ]
+    # MATERIAIS BÁSICOS
+    ativos.extend([
+        ('VALE3', 'Vale', 'Materiais Básicos', 'Mineração', 'ACAO'),
+        ('CSNA3', 'CSN', 'Materiais Básicos', 'Siderurgia', 'ACAO'),
+        ('GGBR4', 'Gerdau', 'Materiais Básicos', 'Siderurgia', 'ACAO'),
+        ('USIM5', 'Usiminas', 'Materiais Básicos', 'Siderurgia', 'ACAO'),
+        ('SUZB3', 'Suzano', 'Materiais Básicos', 'Papel e Celulose', 'ACAO'),
+    ])
     
-    # SETOR TECNOLOGIA E TELECOM
-    tech = [
-        ('VIVT3', 'Vivo', 'Telecomunicações'),
-        ('TIMS3', 'Tim', 'Telecomunicações'),
-        ('OIBR3', 'Oi', 'Telecomunicações'),
-        ('TOTS3', 'Totvs', 'Software'),
-        ('LWSA3', 'Locaweb', 'Internet'),
-    ]
+    # CONSUMO
+    ativos.extend([
+        ('ABEV3', 'Ambev', 'Consumo', 'Bebidas', 'ACAO'),
+        ('JBSS3', 'JBS', 'Consumo', 'Alimentos', 'ACAO'),
+        ('LREN3', 'Lojas Renner', 'Consumo', 'Varejo', 'ACAO'),
+        ('MGLU3', 'Magazine Luiza', 'Consumo', 'Varejo', 'ACAO'),
+        ('CRFB3', 'Carrefour Brasil', 'Consumo', 'Varejo', 'ACAO'),
+        ('ASAI3', 'Assaí', 'Consumo', 'Varejo', 'ACAO'),
+    ])
     
-    # SETOR IMOBILIÁRIO
-    imobiliario = [
-        ('CYRE3', 'Cyrela', 'Construção'),
-        ('MRVE3', 'MRV', 'Construção'),
-        ('EZTC3', 'EzTec', 'Construção'),
-        ('RENT3', 'Localiza', 'Aluguel de Veículos'),
-    ]
+    # SAÚDE
+    ativos.extend([
+        ('RADL3', 'Raia Drogasil', 'Saúde', 'Farmácias', 'ACAO'),
+        ('FLRY3', 'Fleury', 'Saúde', 'Serviços Médicos', 'ACAO'),
+        ('HAPV3', 'Hapvida', 'Saúde', 'Saúde', 'ACAO'),
+    ])
     
-    # SETOR UTILIDADES
-    utilidades = [
-        ('SBSP3', 'Sabesp', 'Água e Saneamento'),
-        ('CSMG3', 'Copasa', 'Água e Saneamento'),
-    ]
+    # INDUSTRIAL
+    ativos.extend([
+        ('WEGE3', 'WEG', 'Industrial', 'Máquinas e Equipamentos', 'ACAO'),
+        ('EMBR3', 'Embraer', 'Industrial', 'Aeronáutica', 'ACAO'),
+        ('RAIL3', 'Rumo', 'Industrial', 'Transporte', 'ACAO'),
+        ('CCRO3', 'CCR', 'Industrial', 'Concessões', 'ACAO'),
+    ])
+    
+    # TECNOLOGIA
+    ativos.extend([
+        ('VIVT3', 'Vivo', 'Tecnologia', 'Telecomunicações', 'ACAO'),
+        ('TIMS3', 'Tim', 'Tecnologia', 'Telecomunicações', 'ACAO'),
+        ('TOTS3', 'Totvs', 'Tecnologia', 'Software', 'ACAO'),
+    ])
+    
+    # IMOBILIÁRIO
+    ativos.extend([
+        ('CYRE3', 'Cyrela', 'Imobiliário', 'Construção', 'ACAO'),
+        ('MRVE3', 'MRV', 'Imobiliário', 'Construção', 'ACAO'),
+        ('RENT3', 'Localiza', 'Imobiliário', 'Aluguel de Veículos', 'ACAO'),
+    ])
+    
+    # UTILIDADES
+    ativos.extend([
+        ('SBSP3', 'Sabesp', 'Utilidades', 'Água e Saneamento', 'ACAO'),
+    ])
     
     # EDUCAÇÃO
-    educacao = [
-        ('YDUQ3', 'Yduqs', 'Educação'),
-        ('COGN3', 'Cogna', 'Educação'),
-    ]
+    ativos.extend([
+        ('YDUQ3', 'Yduqs', 'Educação', 'Educação', 'ACAO'),
+        ('COGN3', 'Cogna', 'Educação', 'Educação', 'ACAO'),
+    ])
     
-    # FIIs - FUNDOS IMOBILIÁRIOS
-    fiis = [
-        ('HGLG11', 'CSHG Logística', 'Logística'),
-        ('MXRF11', 'Maxi Renda', 'Lajes Corporativas'),
-        ('KNRI11', 'Kinea Renda', 'Lajes Corporativas'),
-        ('XPML11', 'XP Malls', 'Shopping'),
-        ('VISC11', 'Vinci Shopping', 'Shopping'),
-        ('BTLG11', 'BTG Logística', 'Logística'),
-        ('HGRU11', 'CSHG Renda Urbana', 'Multiestratégia'),
-        ('KNCR11', 'Kinea Crédito', 'Crédito'),
-        ('PVBI11', 'PV Birigui', 'Lajes Corporativas'),
-        ('IRDM11', 'Iridium', 'Lajes Corporativas'),
-        ('HGRE11', 'CSHG Real Estate', 'Multiestratégia'),
-        ('BCFF11', 'BTG Fundo de Fundos', 'Fundo de Fundos'),
-        ('RZTR11', 'Riza Terrax', 'Desenvolvimento'),
-        ('VILG11', 'Vinci Logística', 'Logística'),
-        ('BRCO11', 'Bresco Logística', 'Logística'),
-    ]
+    # FIIs
+    ativos.extend([
+        ('HGLG11', 'CSHG Logística', 'Fundos Imobiliários', 'Logística', 'FII'),
+        ('MXRF11', 'Maxi Renda', 'Fundos Imobiliários', 'Lajes Corporativas', 'FII'),
+        ('KNRI11', 'Kinea Renda', 'Fundos Imobiliários', 'Lajes Corporativas', 'FII'),
+        ('XPML11', 'XP Malls', 'Fundos Imobiliários', 'Shopping', 'FII'),
+        ('VISC11', 'Vinci Shopping', 'Fundos Imobiliários', 'Shopping', 'FII'),
+        ('BTLG11', 'BTG Logística', 'Fundos Imobiliários', 'Logística', 'FII'),
+        ('HGRU11', 'CSHG Renda Urbana', 'Fundos Imobiliários', 'Multiestratégia', 'FII'),
+        ('KNCR11', 'Kinea Crédito', 'Fundos Imobiliários', 'Crédito', 'FII'),
+        ('PVBI11', 'PV Birigui', 'Fundos Imobiliários', 'Lajes Corporativas', 'FII'),
+        ('IRDM11', 'Iridium', 'Fundos Imobiliários', 'Lajes Corporativas', 'FII'),
+    ])
     
     # ETFs
-    etfs = [
-        ('BOVA11', 'Ibovespa', 'Índice'),
-        ('SMAL11', 'Small Caps', 'Índice'),
-        ('IVVB11', 'S&P 500', 'Índice'),
-        ('PIBB11', 'IBrX', 'Índice'),
-        ('HASH11', 'Nasdaq Crypto', 'Criptomoedas'),
-    ]
+    ativos.extend([
+        ('BOVA11', 'Ibovespa', 'ETFs', 'Índice', 'ETF'),
+        ('SMAL11', 'Small Caps', 'ETFs', 'Índice', 'ETF'),
+        ('IVVB11', 'S&P 500', 'ETFs', 'Índice', 'ETF'),
+        ('PIBB11', 'IBrX', 'ETFs', 'Índice', 'ETF'),
+    ])
     
-    # Processar todos os setores
-    setores_data = [
-        (financeiro, 'Financeiro', 'ACAO'),
-        (energia, 'Energia', 'ACAO'),
-        (materiais, 'Materiais Básicos', 'ACAO'),
-        (consumo, 'Consumo', 'ACAO'),
-        (saude, 'Saúde', 'ACAO'),
-        (industrial, 'Industrial', 'ACAO'),
-        (tech, 'Tecnologia', 'ACAO'),
-        (imobiliario, 'Imobiliário', 'ACAO'),
-        (utilidades, 'Utilidades', 'ACAO'),
-        (educacao, 'Educação', 'ACAO'),
-        (fiis, 'Fundos Imobiliários', 'FII'),
-        (etfs, 'ETFs', 'ETF'),
-    ]
+    # Criar DataFrame
+    df = pd.DataFrame(ativos, columns=['ticker', 'nome', 'setor', 'segmento', 'tipo'])
     
-    for lista_ativos, setor, tipo in setores_data:
-        for ticker, nome, segmento in lista_ativos:
-            ativos['ticker'].append(ticker)
-            ativos['nome'].append(nome)
-            ativos['setor'].append(setor)
-            ativos['segmento'].append(segmento)
-            ativos['tipo'].append(tipo)
-    
-    df = pd.DataFrame(ativos)
     return df
 
 
 # ==========================================
-# FILTRO DE NEGOCIAÇÃO (30 DIAS)
+# FILTRO DE LIQUIDEZ (30 DIAS)
 # ==========================================
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def filtrar_negociados_30d(df_universo, min_sessoes=5, min_volume=1000):
+def verificar_liquidez_ativos(tickers, min_sessoes=5):
     """
-    Filtra ativos negociados nos últimos 30 dias
+    Verifica quais ativos foram negociados nos últimos 30 dias
     
     Args:
-        df_universo: DataFrame com universo de ativos
-        min_sessoes: Mínimo de sessões com volume
-        min_volume: Volume mínimo por sessão
+        tickers: Lista de tickers
+        min_sessoes: Mínimo de sessões com dados
         
     Returns:
-        DataFrame com coluna adicional 'negociado_30d'
+        Dict {ticker: {'negociado': bool, 'sessoes': int}}
     """
-    df = df_universo.copy()
-    df['negociado_30d'] = False
-    df['volume_medio'] = 0.0
-    df['sessoes_ativas'] = 0
+    resultado = {}
     
     end_date = datetime.now()
     start_date = end_date - timedelta(days=35)
     
-    for idx, row in df.iterrows():
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    for idx, ticker in enumerate(tickers):
+        status_text.text(f"Verificando {ticker} ({idx+1}/{len(tickers)})...")
+        
         try:
-            ticker = row['ticker']
-            
-            # Buscar histórico
-            hist = data.get_price_history(
-                [ticker],
-                start_date,
-                end_date,
-                use_cache=True
-            )
+            hist = data.get_price_history([ticker], start_date, end_date, use_cache=True)
             
             if not hist.empty and ticker in hist.columns:
-                # Contar sessões com volume (se disponível)
-                # Como estamos usando preços, vamos verificar se há dados
                 dados_validos = hist[ticker].dropna()
-                sessoes_ativas = len(dados_validos)
-                
-                # Calcular volume médio (se disponível no histórico)
-                volume_medio = 0
-                
-                # Verificar critério
-                if sessoes_ativas >= min_sessoes:
-                    df.at[idx, 'negociado_30d'] = True
-                    df.at[idx, 'sessoes_ativas'] = sessoes_ativas
-                    df.at[idx, 'volume_medio'] = volume_medio
+                sessoes = len(dados_validos)
+                negociado = sessoes >= min_sessoes
+            else:
+                sessoes = 0
+                negociado = False
             
-        except Exception as e:
-            continue
+            resultado[ticker] = {
+                'negociado': negociado,
+                'sessoes': sessoes
+            }
+            
+        except:
+            resultado[ticker] = {
+                'negociado': False,
+                'sessoes': 0
+            }
+        
+        progress_bar.progress((idx + 1) / len(tickers))
     
-    return df
+    progress_bar.empty()
+    status_text.empty()
+    
+    return resultado
 
 
 # ==========================================
-# FUNÇÕES DE SELEÇÃO INTELIGENTE
+# SELEÇÃO INTELIGENTE
 # ==========================================
 
-def selecionar_top_liquidez(df, n=10):
-    """Seleciona top N ativos por liquidez"""
-    df_sorted = df[df['negociado_30d']].sort_values('sessoes_ativas', ascending=False)
-    return df_sorted.head(n)['ticker'].tolist()
-
-
-def selecionar_top_dy(df, n=10):
-    """Seleciona top N ativos por Dividend Yield estimado"""
-    # Para simplificar, vamos priorizar FIIs e ações de dividendos conhecidas
-    tickers_alto_dy = [
-        'ITUB4', 'BBDC4', 'BBAS3', 'PETR4', 'VALE3', 'TAEE11',
-        'HGLG11', 'MXRF11', 'KNRI11', 'XPML11', 'VISC11',
-        'BTLG11', 'HGRU11', 'KNCR11', 'PVBI11'
-    ]
+def selecionar_por_criterio(df, criterio='liquidez', n=10):
+    """
+    Seleciona ativos por critério específico
     
-    df_dy = df[df['ticker'].isin(tickers_alto_dy) & df['negociado_30d']]
-    return df_dy.head(n)['ticker'].tolist()
+    Args:
+        df: DataFrame com ativos
+        criterio: 'liquidez', 'dy', 'setor'
+        n: Número de ativos
+        
+    Returns:
+        Lista de tickers
+    """
+    if criterio == 'liquidez':
+        # Ativos mais líquidos (blue chips conhecidos)
+        blue_chips = ['PETR4', 'VALE3', 'ITUB4', 'BBDC4', 'BBAS3', 'ABEV3', 
+                      'WEGE3', 'B3SA3', 'RENT3', 'ELET3']
+        return [t for t in blue_chips if t in df['ticker'].values][:n]
+    
+    elif criterio == 'dy':
+        # Ativos conhecidos por bons dividendos
+        alto_dy = ['ITUB4', 'BBDC4', 'BBAS3', 'PETR4', 'VALE3', 'TAEE11',
+                   'HGLG11', 'MXRF11', 'KNRI11', 'XPML11']
+        return [t for t in alto_dy if t in df['ticker'].values][:n]
+    
+    elif criterio == 'fiis':
+        # Apenas FIIs
+        df_fiis = df[df['tipo'] == 'FII']
+        return df_fiis['ticker'].head(n).tolist()
+    
+    return []
 
 
 # ==========================================
@@ -295,43 +281,32 @@ def main():
     """Função principal da página"""
     
     st.title("📊 Seleção de Ativos")
-    st.markdown("Lista de ativos negociados nos últimos 30 dias com filtros avançados")
+    st.markdown("Selecione ativos da B3 para análise de portfólio e dividendos")
     st.markdown("---")
     
     # Carregar universo
-    with st.spinner("📥 Carregando universo de ativos B3..."):
+    with st.spinner("📥 Carregando universo B3..."):
         df_universo = carregar_universo_b3()
-        st.success(f"✅ **{len(df_universo)} ativos** no universo B3")
+    
+    # Verificar se carregou do CSV ou padrão
+    csv_path = root_dir / 'assets' / 'b3_universe.csv'
+    if csv_path.exists():
+        st.success(f"✅ **{len(df_universo)} ativos** carregados do arquivo CSV")
+    else:
+        st.info(f"ℹ️ **{len(df_universo)} ativos** no universo padrão (crie `assets/b3_universe.csv` para personalizar)")
+    
+    # Inicializar estado
+    if 'df_filtrado' not in st.session_state:
+        st.session_state.df_filtrado = df_universo.copy()
+        st.session_state.df_filtrado['verificado_30d'] = False
+        st.session_state.df_filtrado['sessoes_ativas'] = 0
     
     # Sidebar - Filtros
     with st.sidebar:
         st.header("🔍 Filtros")
         
-        # Filtro de negociação
-        st.subheader("📈 Negociação")
-        
-        aplicar_filtro_30d = st.checkbox(
-            "Apenas negociados (30 dias)",
-            value=True,
-            help="Filtra apenas ativos com negociação nos últimos 30 dias"
-        )
-        
-        if aplicar_filtro_30d:
-            min_sessoes = st.slider(
-                "Mínimo de sessões ativas",
-                min_value=1,
-                max_value=20,
-                value=5,
-                help="Número mínimo de dias com negociação"
-            )
-        else:
-            min_sessoes = 0
-        
-        st.markdown("---")
-        
-        # Filtro por tipo
-        st.subheader("📋 Tipo de Ativo")
-        
+        # Tipo de ativo
+        st.subheader("📋 Tipo")
         tipos_disponiveis = sorted(df_universo['tipo'].unique())
         tipos_selecionados = st.multiselect(
             "Selecione os tipos",
@@ -342,100 +317,148 @@ def main():
         
         st.markdown("---")
         
-        # Filtro por setor
+        # Setor
         st.subheader("🏢 Setor")
-        
-        setores_disponiveis = sorted(df_universo['setor'].unique())
-        setores_selecionados = st.multiselect(
-            "Selecione os setores",
+        setores_disponiveis = ['Todos'] + sorted(df_universo['setor'].unique())
+        setor_selecionado = st.selectbox(
+            "Filtrar por setor",
             options=setores_disponiveis,
-            default=setores_disponiveis,
-            help="Filtre por setor econômico"
+            help="Escolha um setor específico"
         )
         
         st.markdown("---")
         
-        # Filtro por segmento
+        # Segmento
         st.subheader("🎯 Segmento")
         
-        segmentos_disponiveis = sorted(df_universo['segmento'].unique())
-        segmentos_selecionados = st.multiselect(
-            "Selecione os segmentos",
+        # Filtrar segmentos baseado no setor
+        if setor_selecionado != 'Todos':
+            segmentos_disponiveis = ['Todos'] + sorted(
+                df_universo[df_universo['setor'] == setor_selecionado]['segmento'].unique()
+            )
+        else:
+            segmentos_disponiveis = ['Todos'] + sorted(df_universo['segmento'].unique())
+        
+        segmento_selecionado = st.selectbox(
+            "Filtrar por segmento",
             options=segmentos_disponiveis,
-            help="Filtre por segmento específico"
+            help="Escolha um segmento específico"
         )
         
         st.markdown("---")
         
         # Busca por texto
         st.subheader("🔎 Busca")
-        
         texto_busca = st.text_input(
-            "Buscar ticker ou nome",
-            placeholder="Ex: PETR4, Petrobras...",
+            "Ticker ou Nome",
+            placeholder="Ex: PETR4, Petrobras",
             help="Digite parte do código ou nome"
         )
         
         st.markdown("---")
         
-        # Botão aplicar filtros
-        btn_filtrar = st.button(
+        # Verificação de liquidez
+        st.subheader("📈 Liquidez (30 dias)")
+        
+        verificar_liquidez = st.checkbox(
+            "Verificar negociação",
+            value=False,
+            help="Verifica quais ativos foram negociados nos últimos 30 dias (pode demorar)"
+        )
+        
+        if verificar_liquidez:
+            min_sessoes = st.slider(
+                "Mínimo de sessões",
+                min_value=1,
+                max_value=20,
+                value=5,
+                help="Dias mínimos com negociação"
+            )
+            
+            apenas_negociados = st.checkbox(
+                "Apenas negociados",
+                value=True,
+                help="Mostrar apenas ativos que passaram no filtro"
+            )
+        else:
+            min_sessoes = 5
+            apenas_negociados = False
+        
+        st.markdown("---")
+        
+        # Botão aplicar
+        btn_aplicar = st.button(
             "🔄 Aplicar Filtros",
             type="primary",
             use_container_width=True
         )
     
-    # Aplicar filtros
-    if btn_filtrar or aplicar_filtro_30d:
+    # Aplicar filtros quando botão clicado
+    if btn_aplicar:
         
-        # Filtro de negociação 30d
-        if aplicar_filtro_30d:
-            with st.spinner("🔍 Verificando ativos negociados (isso pode levar alguns minutos)..."):
-                df_filtrado = filtrar_negociados_30d(df_universo, min_sessoes)
-                df_filtrado = df_filtrado[df_filtrado['negociado_30d']]
-        else:
+        with st.spinner("🔍 Aplicando filtros..."):
             df_filtrado = df_universo.copy()
-            df_filtrado['negociado_30d'] = True
-            df_filtrado['sessoes_ativas'] = 0
-        
-        # Filtro por tipo
-        if tipos_selecionados:
-            df_filtrado = df_filtrado[df_filtrado['tipo'].isin(tipos_selecionados)]
-        
-        # Filtro por setor
-        if setores_selecionados:
-            df_filtrado = df_filtrado[df_filtrado['setor'].isin(setores_selecionados)]
-        
-        # Filtro por segmento
-        if segmentos_selecionados:
-            df_filtrado = df_filtrado[df_filtrado['segmento'].isin(segmentos_selecionados)]
-        
-        # Busca por texto
-        if texto_busca:
-            texto = texto_busca.upper()
-            mask = (
-                df_filtrado['ticker'].str.contains(texto, na=False) |
-                df_filtrado['nome'].str.upper().str.contains(texto, na=False)
-            )
-            df_filtrado = df_filtrado[mask]
-        
-        # Guardar no session state
-        st.session_state.universe_df = df_filtrado
+            
+            # Filtro por tipo
+            if tipos_selecionados:
+                df_filtrado = df_filtrado[df_filtrado['tipo'].isin(tipos_selecionados)]
+            
+            # Filtro por setor
+            if setor_selecionado != 'Todos':
+                df_filtrado = df_filtrado[df_filtrado['setor'] == setor_selecionado]
+            
+            # Filtro por segmento
+            if segmento_selecionado != 'Todos':
+                df_filtrado = df_filtrado[df_filtrado['segmento'] == segmento_selecionado]
+            
+            # Busca por texto
+            if texto_busca:
+                texto = texto_busca.upper()
+                mask = (
+                    df_filtrado['ticker'].str.contains(texto, na=False) |
+                    df_filtrado['nome'].str.upper().str.contains(texto, na=False)
+                )
+                df_filtrado = df_filtrado[mask]
+            
+            # Verificar liquidez se solicitado
+            if verificar_liquidez:
+                tickers_verificar = df_filtrado['ticker'].tolist()
+                
+                if len(tickers_verificar) > 0:
+                    st.info(f"🔍 Verificando liquidez de {len(tickers_verificar)} ativos...")
+                    
+                    liquidez_info = verificar_liquidez_ativos(tickers_verificar, min_sessoes)
+                    
+                    # Adicionar informações ao DataFrame
+                    df_filtrado['verificado_30d'] = True
+                    df_filtrado['negociado_30d'] = df_filtrado['ticker'].map(
+                        lambda t: liquidez_info.get(t, {}).get('negociado', False)
+                    )
+                    df_filtrado['sessoes_ativas'] = df_filtrado['ticker'].map(
+                        lambda t: liquidez_info.get(t, {}).get('sessoes', 0)
+                    )
+                    
+                    # Filtrar apenas negociados se solicitado
+                    if apenas_negociados:
+                        df_filtrado = df_filtrado[df_filtrado['negociado_30d']]
+                    
+                    st.success(f"✅ Verificação concluída!")
+            else:
+                df_filtrado['verificado_30d'] = False
+                df_filtrado['sessoes_ativas'] = 0
+            
+            # Salvar resultado
+            st.session_state.df_filtrado = df_filtrado
+            st.success(f"✅ Filtros aplicados: **{len(df_filtrado)} ativos** encontrados")
     
-    else:
-        # Usar universo completo se não filtrou
-        if st.session_state.universe_df.empty:
-            st.session_state.universe_df = df_universo
-            st.session_state.universe_df['negociado_30d'] = False
-            st.session_state.universe_df['sessoes_ativas'] = 0
-        
-        df_filtrado = st.session_state.universe_df
+    # Usar DataFrame filtrado
+    df_filtrado = st.session_state.df_filtrado
     
     # Métricas
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric("Total no Universo", len(df_universo))
+        st.metric("Universo Total", len(df_universo))
     
     with col2:
         st.metric("Após Filtros", len(df_filtrado))
@@ -445,66 +468,72 @@ def main():
     
     with col4:
         if len(df_filtrado) > 50:
-            st.warning(f"⚠️ {len(df_filtrado)} ativos")
+            st.warning(f"⚠️ Muitos ativos")
         else:
-            st.success(f"✅ {len(df_filtrado)} ativos")
+            st.success(f"✅ OK")
     
     st.markdown("---")
     
-    # Botões de seleção inteligente
+    # Seleção rápida
     st.subheader("⚡ Seleção Rápida")
     
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
-        if st.button("🔝 Top 10 Liquidez", use_container_width=True):
-            top_liq = selecionar_top_liquidez(df_filtrado, 10)
-            st.session_state.selected_tickers = top_liq
-            st.success(f"✅ {len(top_liq)} ativos selecionados")
+        if st.button("🔝 Top Liquidez", use_container_width=True):
+            selecionados = selecionar_por_criterio(df_filtrado, 'liquidez', 10)
+            st.session_state.selected_tickers = selecionados
             st.rerun()
     
     with col2:
-        if st.button("💰 Top 10 DY", use_container_width=True):
-            top_dy = selecionar_top_dy(df_filtrado, 10)
-            st.session_state.selected_tickers = top_dy
-            st.success(f"✅ {len(top_dy)} ativos selecionados")
+        if st.button("💰 Top DY", use_container_width=True):
+            selecionados = selecionar_por_criterio(df_filtrado, 'dy', 10)
+            st.session_state.selected_tickers = selecionados
             st.rerun()
     
     with col3:
-        if st.button("📋 Selecionar Todos", use_container_width=True):
-            if len(df_filtrado) > 50:
-                st.warning("⚠️ Muitos ativos! Recomendado: use filtros para reduzir")
-            else:
-                st.session_state.selected_tickers = df_filtrado['ticker'].tolist()
-                st.success(f"✅ {len(df_filtrado)} ativos selecionados")
-                st.rerun()
+        if st.button("🏢 Apenas FIIs", use_container_width=True):
+            selecionados = selecionar_por_criterio(df_filtrado, 'fiis', 15)
+            st.session_state.selected_tickers = selecionados
+            st.rerun()
     
     with col4:
-        if st.button("🗑️ Limpar Seleção", use_container_width=True):
+        if st.button("📋 Todos", use_container_width=True):
+            if len(df_filtrado) > 50:
+                st.warning("⚠️ Muitos ativos! Use filtros para reduzir")
+            else:
+                st.session_state.selected_tickers = df_filtrado['ticker'].tolist()
+                st.rerun()
+    
+    with col5:
+        if st.button("🗑️ Limpar", use_container_width=True):
             st.session_state.selected_tickers = []
             st.rerun()
     
     st.markdown("---")
     
-    # Tabela de seleção
+    # Tabela interativa
     st.subheader("📋 Ativos Disponíveis")
     
     if not df_filtrado.empty:
-        # Adicionar coluna de seleção
+        # Preparar DataFrame para exibição
         df_display = df_filtrado.copy()
         df_display['✓'] = df_display['ticker'].isin(st.session_state.selected_tickers)
         
-        # Reordenar colunas
-        cols_order = ['✓', 'ticker', 'nome', 'tipo', 'setor', 'segmento', 'sessoes_ativas']
-        df_display = df_display[cols_order]
+        # Colunas para exibir
+        if 'sessoes_ativas' in df_display.columns:
+            cols_display = ['✓', 'ticker', 'nome', 'tipo', 'setor', 'segmento', 'sessoes_ativas']
+        else:
+            cols_display = ['✓', 'ticker', 'nome', 'tipo', 'setor', 'segmento']
         
-        # Editor de dados
+        df_display = df_display[cols_display]
+        
+        # Editor
         edited_df = st.data_editor(
             df_display,
             column_config={
                 "✓": st.column_config.CheckboxColumn(
                     "Selecionar",
-                    help="Marque para adicionar ao portfólio",
                     default=False,
                     width="small"
                 ),
@@ -514,12 +543,12 @@ def main():
                 "setor": st.column_config.TextColumn("Setor", width="medium"),
                 "segmento": st.column_config.TextColumn("Segmento", width="medium"),
                 "sessoes_ativas": st.column_config.NumberColumn(
-                    "Sessões (30d)",
-                    help="Dias com negociação nos últimos 30 dias",
+                    "Sessões 30d",
+                    help="Dias com negociação",
                     width="small"
                 )
             },
-            disabled=["ticker", "nome", "tipo", "setor", "segmento", "sessoes_ativas"],
+            disabled=[c for c in cols_display if c != '✓'],
             hide_index=True,
             use_container_width=True,
             height=500
@@ -527,22 +556,22 @@ def main():
         
         # Atualizar seleção
         novos_selecionados = edited_df[edited_df['✓']]['ticker'].tolist()
-        if novos_selecionados != st.session_state.selected_tickers:
+        if set(novos_selecionados) != set(st.session_state.selected_tickers):
             st.session_state.selected_tickers = novos_selecionados
             st.rerun()
     
     else:
-        st.warning("⚠️ Nenhum ativo encontrado com os filtros aplicados")
+        st.warning("⚠️ Nenhum ativo encontrado. Ajuste os filtros.")
     
     st.markdown("---")
     
-    # Ativos selecionados
-    st.subheader("✅ Ativos Selecionados para o Portfólio")
+    # Resumo da seleção
+    st.subheader("✅ Resumo da Seleção")
     
     if st.session_state.selected_tickers:
         df_selecionados = df_filtrado[
             df_filtrado['ticker'].isin(st.session_state.selected_tickers)
-        ].copy()
+        ]
         
         # Estatísticas
         col1, col2, col3, col4 = st.columns(4)
@@ -564,61 +593,61 @@ def main():
         
         # Tabela resumida
         st.dataframe(
-            df_selecionados[['ticker', 'nome', 'tipo', 'setor', 'segmento']],
+            df_selecionados[['ticker', 'nome', 'tipo', 'setor']],
             use_container_width=True,
             hide_index=True
         )
         
-        # Botões de ação
-        col1, col2, col3 = st.columns([2, 2, 3])
+        # Ações
+        col1, col2 = st.columns(2)
         
         with col1:
             if st.button("💾 Salvar no Portfólio", type="primary", use_container_width=True):
                 st.session_state.portfolio_tickers = st.session_state.selected_tickers.copy()
-                st.success(f"✅ **{len(st.session_state.portfolio_tickers)} ativos** salvos no portfólio!")
+                st.success(f"✅ **{len(st.session_state.portfolio_tickers)} ativos** salvos!")
                 st.balloons()
         
         with col2:
-            # Export CSV
             csv = df_selecionados.to_csv(index=False)
             st.download_button(
-                label="📥 Exportar CSV",
+                "📥 Exportar CSV",
                 data=csv,
-                file_name=f"ativos_selecionados_{datetime.now().strftime('%Y%m%d')}.csv",
+                file_name=f"ativos_{datetime.now().strftime('%Y%m%d')}.csv",
                 mime="text/csv",
                 use_container_width=True
             )
     
     else:
-        st.info("ℹ️ Nenhum ativo selecionado ainda. Use a tabela acima ou os botões de seleção rápida.")
+        st.info("ℹ️ Nenhum ativo selecionado. Use a tabela ou botões de seleção rápida.")
     
     # Informações
-    with st.expander("ℹ️ Como usar esta página"):
+    with st.expander("ℹ️ Como usar"):
         st.markdown("""
         ### 📊 Seleção de Ativos
         
-        **1. Aplicar Filtros**
-        - Use a barra lateral para filtrar por tipo, setor, segmento
-        - Ative "Apenas negociados (30 dias)" para liquidez
-        - Busque por ticker ou nome específico
+        **1. Configurar Filtros (Sidebar)**
+        - Escolha tipo de ativo (Ações, FIIs, ETFs)
+        - Filtre por setor e segmento
+        - Busque por ticker ou nome
+        - Opcionalmente, verifique liquidez (30 dias)
         
-        **2. Seleção Rápida**
-        - **Top 10 Liquidez**: Ativos mais negociados
-        - **Top 10 DY**: Ativos com melhor histórico de dividendos
-        - **Selecionar Todos**: Todos os ativos filtrados (máx. 50 recomendado)
+        **2. Aplicar Filtros**
+        - Clique em "Aplicar Filtros" para executar
+        - Aguarde o processamento
         
-        **3. Seleção Manual**
-        - Marque/desmarque ativos na tabela
-        - Ordene clicando nos cabeçalhos das colunas
+        **3. Selecionar Ativos**
+        - Use botões de seleção rápida, ou
+        - Marque manualmente na tabela
         
         **4. Salvar**
-        - Clique em "Salvar no Portfólio" para usar nas outras páginas
-        - Exporte para CSV se desejar backup
+        - "Salvar no Portfólio" para usar nas outras páginas
+        - "Exportar CSV" para backup
         
-        ### ⚠️ Dicas
-        - Evite selecionar mais de 50 ativos (impacta performance)
-        - Diversifique entre setores diferentes
-        - Priorize ativos com boa liquidez (sessões ativas > 5)
+        ### 💡 Dicas
+        - Arquivo CSV: Coloque seu `b3_universe.csv` em `assets/`
+        - Formato CSV: ticker, nome, setor, segmento, tipo
+        - Liquidez: Verificação pode levar tempo com muitos ativos
+        - Performance: Evite selecionar mais de 50 ativos
         """)
 
 
