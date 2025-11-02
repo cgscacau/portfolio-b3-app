@@ -26,8 +26,11 @@ st.set_page_config(
     layout="wide"
 )
 
-# Painel de cache
-cache_manager.exibir_painel_controle()
+# Painel de cache (opcional)
+try:
+    cache_manager.exibir_painel_controle()
+except AttributeError:
+    pass  # Método não disponível, continua sem o painel
 
 
 # ==========================================
