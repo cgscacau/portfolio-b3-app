@@ -8,10 +8,41 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
+import os
 
 # Importar módulos
 from core.data import get_price_history
 from core.cache import cache_manager
+
+
+# ==========================================
+# CARREGAR BASE DE ATIVOS
+# ==========================================
+
+@st.cache_data
+def carregar_base_ativos():
+    """Carrega base completa de ativos da B3"""
+    try:
+        caminho = os.path.join('assets', 'b3_universe.csv')
+        df = pd.read_csv(caminho)
+        
+        # Garantir que tem coluna de ticker
+        if 'ticker' in df.columns:
+            tickers = df['ticker'].dropna().unique().tolist()
+        elif 'symbol' in df.columns:
+            tickers = df['symbol'].dropna().unique().tolist()
+        else:
+            # Pegar primeira coluna
+            tickers = df.iloc[:, 0].dropna().unique().tolist()
+        
+        # Limpar e normalizar
+        tickers = [str(t).upper().strip() for t in tickers if str(t).strip()]
+        
+        return sorted(tickers)
+    
+    except Exception as e:
+        st.error(f"Erro ao carregar base de ativos: {str(e)}")
+        return []
 
 
 # ==========================================
@@ -208,33 +239,123 @@ with st.sidebar:
 # SELEÇÃO DE ATIVOS
 # ==========================================
 
-st.subheader("📈 Portfólio para Análise")
+st.subheader("📈 Seleção de Ativos")
 
-portfolios_disponiveis = []
-try:
-    from core.portfolio import listar_portfolios, carregar_portfolio
-    portfolios_disponiveis = listar_portfolios()
-except:
-    pass
+# Carregar base completa
+base_completa = carregar_base_ativos()
 
-usar_portfolio = False
+if base_completa:
+    st.success(f"✅ Base carregada: {len(base_completa)} ativos disponíveis")
+else:
+    st.warning("⚠️ Não foi possível carregar a base de ativos")
 
-if portfolios_disponiveis:
-    usar_portfolio = st.checkbox("Usar portfólio salvo", value=True)
+# Opções de seleção
+opcao_selecao = st.radio(
+    "Como deseja selecionar os ativos?",
+    options=[
+        "📁 Usar portfólio salvo",
+        "🌐 Usar base completa da B3",
+        "✍️ Lista personalizada"
+    ],
+    horizontal=False
+)
+
+tickers = []
+
+# OPÇÃO 1: Portfólio salvo
+if opcao_selecao == "📁 Usar portfólio salvo":
+    try:
+        from core.portfolio import listar_portfolios, carregar_portfolio
+        portfolios_disponiveis = listar_portfolios()
+        
+        if portfolios_disponiveis:
+            portfolio_selecionado = st.selectbox("Selecione o portfólio", portfolios_disponiveis)
+            portfolio = carregar_portfolio(portfolio_selecionado)
+            tickers = portfolio.tickers if portfolio else []
+            st.info(f"📊 {len(tickers)} ativos do portfólio '{portfolio_selecionado}'")
+        else:
+            st.warning("Nenhum portfólio salvo encontrado")
+    except:
+        st.error("Erro ao carregar portfólios")
+
+# OPÇÃO 2: Base completa
+elif opcao_selecao == "🌐 Usar base completa da B3":
+    if base_completa:
+        
+        # Filtros
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            filtro_tipo = st.multiselect(
+                "Filtrar por tipo",
+                options=["Ações", "FIIs", "ETFs", "Todos"],
+                default=["Todos"]
+            )
+        
+        with col2:
+            limite_ativos = st.number_input(
+                "Limite de ativos (0 = todos)",
+                min_value=0,
+                max_value=len(base_completa),
+                value=50,
+                step=10,
+                help="Para evitar sobrecarga, limite a quantidade de ativos"
+            )
+        
+        # Aplicar filtros
+        if "Todos" in filtro_tipo:
+            tickers = base_completa
+        else:
+            tickers_filtrados = []
+            
+            if "Ações" in filtro_tipo:
+                # Ações terminam com 3 ou 4
+                tickers_filtrados.extend([t for t in base_completa if t[-1] in ['3', '4']])
+            
+            if "FIIs" in filtro_tipo:
+                # FIIs terminam com 11
+                tickers_filtrados.extend([t for t in base_completa if t.endswith('11')])
+            
+            if "ETFs" in filtro_tipo:
+                # ETFs geralmente contém 'B' no final
+                tickers_filtrados.extend([t for t in base_completa if 'B' in t[-2:]])
+            
+            tickers = sorted(list(set(tickers_filtrados)))
+        
+        # Aplicar limite
+        if limite_ativos > 0 and len(tickers) > limite_ativos:
+            tickers = tickers[:limite_ativos]
+            st.warning(f"⚠️ Limitado a {limite_ativos} ativos. Ajuste o limite se quiser analisar mais.")
+        
+        st.info(f"📊 {len(tickers)} ativos selecionados para análise")
+        
+        with st.expander("👀 Ver lista de ativos"):
+            # Mostrar em colunas
+            num_colunas = 5
+            cols = st.columns(num_colunas)
+            for idx, ticker in enumerate(tickers):
+                with cols[idx % num_colunas]:
+                    st.text(ticker)
+    else:
+        st.error("Base de ativos não disponível")
+
+# OPÇÃO 3: Lista personalizada
+elif opcao_selecao == "✍️ Lista personalizada":
+    tickers_input = st.text_area(
+        "Digite os ativos (um por linha ou separados por vírgula)",
+        value="PETR4\nVALE3\nITUB4\nBBDC4\nWEGE3",
+        height=150
+    )
     
-    if usar_portfolio:
-        portfolio_selecionado = st.selectbox("Selecione o portfólio", portfolios_disponiveis)
-        portfolio = carregar_portfolio(portfolio_selecionado)
-        tickers = portfolio.tickers if portfolio else []
-        st.info(f"📊 {len(tickers)} ativos selecionados")
+    # Processar input (aceita vírgula ou linha)
+    tickers_raw = tickers_input.replace(',', '\n').split('\n')
+    tickers = [t.strip().upper() for t in tickers_raw if t.strip()]
+    
+    st.info(f"📊 {len(tickers)} ativos digitados")
 
-if not usar_portfolio or not portfolios_disponiveis:
-    tickers_input = st.text_input("Ativos (separados por vírgula)", value="PETR4,VALE3,ITUB4,BBDC4,WEGE3")
-    tickers = [t.strip().upper() for t in tickers_input.split(",") if t.strip()]
-    st.info(f"📊 {len(tickers)} ativos selecionados")
-
+# Validação
 if not tickers:
-    st.warning("⚠️ Selecione pelo menos um ativo")
+    st.warning("⚠️ Selecione pelo menos um ativo para continuar")
     st.stop()
 
 st.markdown("---")
@@ -251,12 +372,20 @@ if st.button("🔍 Executar Screener", type="primary", use_container_width=True)
     
     progress_bar = st.progress(0)
     status_text = st.empty()
+    contador_text = st.empty()
+    
+    total_analisados = 0
+    total_com_dados = 0
+    total_convergentes = 0
     
     for idx, ticker in enumerate(tickers):
         
         progress = (idx + 1) / len(tickers)
         progress_bar.progress(progress)
-        status_text.text(f"Analisando {ticker}... ({idx+1}/{len(tickers)})")
+        status_text.text(f"Analisando {ticker}...")
+        contador_text.info(f"📊 Progresso: {idx+1}/{len(tickers)} | ✅ Com dados: {total_com_dados} | 🎯 Convergentes: {total_convergentes}")
+        
+        total_analisados += 1
         
         try:
             df = get_price_history([ticker], data_inicio, data_fim_dt)
@@ -275,6 +404,8 @@ if st.button("🔍 Executar Screener", type="primary", use_container_width=True)
             if len(df_ativo) < max(periodo_superior, periodo_inferior, ema_periodo):
                 continue
             
+            total_com_dados += 1
+            
             df_diario = calcular_cacaus_channel(df_ativo, periodo_superior, periodo_inferior, ema_periodo)
             df_semanal_raw = resample_para_semanal(df_ativo)
             
@@ -285,15 +416,14 @@ if st.button("🔍 Executar Screener", type="primary", use_container_width=True)
             
             convergencia = detectar_convergencia(df_diario, df_semanal)
             
-            # Salvar todos os dados (mesmo sem convergência)
             todos_dados[ticker] = {
                 'df_diario': df_diario,
                 'df_semanal': df_semanal,
                 'convergencia': convergencia
             }
             
-            # Adicionar apenas convergentes na lista de oportunidades
             if convergencia['convergente']:
+                total_convergentes += 1
                 pontos = calcular_entrada_stop_alvo(df_diario, convergencia['direcao'], rr_ratio)
                 
                 oportunidades.append({
@@ -310,9 +440,22 @@ if st.button("🔍 Executar Screener", type="primary", use_container_width=True)
     
     progress_bar.empty()
     status_text.empty()
+    contador_text.empty()
     
     st.session_state.cacaus_oportunidades = oportunidades
     st.session_state.cacaus_todos_dados = todos_dados
+    
+    # Resumo da análise
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric("Ativos Analisados", total_analisados)
+    
+    with col2:
+        st.metric("Com Dados Suficientes", total_com_dados)
+    
+    with col3:
+        st.metric("🎯 Convergentes", total_convergentes)
     
     if oportunidades:
         st.success(f"✅ {len(oportunidades)} oportunidade(s) com convergência detectada(s)!")
@@ -343,7 +486,6 @@ if 'cacaus_oportunidades' in st.session_state and st.session_state.cacaus_oportu
         for opp in oportunidades
     ])
     
-    # Seleção de ativo
     st.subheader("🎯 Selecione um ativo para visualizar")
     
     ativo_selecionado = st.selectbox(
@@ -352,7 +494,6 @@ if 'cacaus_oportunidades' in st.session_state and st.session_state.cacaus_oportu
         format_func=lambda x: f"{x} - {next((o['direcao'] for o in oportunidades if o['ticker'] == x), '')}"
     )
     
-    # Mostrar tabela completa
     with st.expander("📋 Ver Tabela Completa", expanded=False):
         st.dataframe(
             df_screener,
@@ -367,7 +508,6 @@ if 'cacaus_oportunidades' in st.session_state and st.session_state.cacaus_oportu
     
     st.markdown("---")
     
-    # Buscar dados do ativo selecionado
     opp_selecionada = next((o for o in oportunidades if o['ticker'] == ativo_selecionado), None)
     
     if opp_selecionada and ativo_selecionado in st.session_state.cacaus_todos_dados:
@@ -376,7 +516,6 @@ if 'cacaus_oportunidades' in st.session_state and st.session_state.cacaus_oportu
         
         st.header(f"📈 Análise Gráfica")
         
-        # Informações do setup
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
@@ -392,7 +531,6 @@ if 'cacaus_oportunidades' in st.session_state and st.session_state.cacaus_oportu
         with col4:
             st.metric("Alvo", f"R$ {opp_selecionada['alvo']:.2f}")
         
-        # Alternância de timeframe
         timeframe = st.radio(
             "Timeframe",
             options=["Diário", "Semanal"],
@@ -400,7 +538,6 @@ if 'cacaus_oportunidades' in st.session_state and st.session_state.cacaus_oportu
             label_visibility="collapsed"
         )
         
-        # Gráfico único
         fig = criar_grafico_cacaus_channel(
             dados_ativo['df_diario'],
             dados_ativo['df_semanal'],
@@ -423,8 +560,8 @@ st.markdown("""
 ### 📖 Como funciona o Screener?
 
 **Processo:**
-1. 🔍 Analisa TODOS os ativos do portfólio selecionado
-2. 📊 Calcula o Cacau's Channel em timeframe Diário e Semanal
+1. 🔍 Seleciona fonte de ativos (Portfólio, Base B3 completa ou Lista manual)
+2. 📊 Calcula o Cacau's Channel em timeframe Diário e Semanal para cada ativo
 3. ✅ Identifica apenas ativos com **convergência** entre os dois timeframes
 4. 📋 Exibe tabela resumida (screener) apenas com oportunidades
 5. 📈 Permite visualizar gráfico de cada ativo individualmente
@@ -432,11 +569,6 @@ st.markdown("""
 **Regras de Convergência:**
 - 🟢 **COMPRA:** Linha Branca > Linha Laranja (Diário E Semanal)
 - 🔴 **VENDA:** Linha Branca < Linha Laranja (Diário E Semanal)
-
-**Gestão de Risco:**
-- **Stop COMPRA:** Linha Inferior (verde)
-- **Stop VENDA:** Linha Superior (vermelha)
-- **Alvo:** Baseado no Risk/Reward selecionado
 
 ⚠️ **Aviso:** Ferramenta de análise técnica. Não constitui recomendação de investimento.
 """)
