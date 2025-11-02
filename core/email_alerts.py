@@ -25,9 +25,9 @@ def enviar_alerta_oportunidades(oportunidades: List[Dict]) -> bool:
     
     try:
         # Buscar credenciais do Streamlit Secrets
-        api_key = st.secrets["email"]["sendgrid_api_key"]
-        email_from = st.secrets["email"]["email_from"]
-        email_to = st.secrets["email"]["email_to"]
+        api_key = st.secrets["email"]["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"]
+        email_from = st.secrets["email"]["cgscacau@gmail.com"]
+        email_to = st.secrets["email"]["cgscacau@gmail.com"]
         
     except Exception as e:
         logger.error(f"Erro ao carregar credenciais: {str(e)}")
