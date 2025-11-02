@@ -23,6 +23,24 @@ PORTFOLIOS_FILE = os.path.join(PORTFOLIOS_DIR, "portfolios.json")
 
 
 # ==========================================
+# INICIALIZAÇÃO GLOBAL
+# ==========================================
+
+def _garantir_session_state():
+    """Garante que session_state está inicializado"""
+    if 'portfolios' not in st.session_state:
+        st.session_state.portfolios = {}
+    
+    if 'portfolio_ativo' not in st.session_state:
+        st.session_state.portfolio_ativo = None
+
+
+def _garantir_diretorio():
+    """Garante que diretório existe"""
+    os.makedirs(PORTFOLIOS_DIR, exist_ok=True)
+
+
+# ==========================================
 # CLASSE PORTFOLIO
 # ==========================================
 
@@ -149,6 +167,38 @@ class Portfolio:
 
 
 # ==========================================
+# FUNÇÕES DE ARQUIVO
+# ==========================================
+
+def _carregar_arquivo() -> Dict[str, Dict]:
+    """Carrega portfólios do arquivo"""
+    _garantir_diretorio()
+    
+    if not os.path.exists(PORTFOLIOS_FILE):
+        return {}
+    
+    try:
+        with open(PORTFOLIOS_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error(f"Erro ao carregar arquivo: {str(e)}")
+        return {}
+
+
+def _salvar_arquivo(portfolios_dict: Dict[str, Dict]) -> bool:
+    """Salva portfólios no arquivo"""
+    _garantir_diretorio()
+    
+    try:
+        with open(PORTFOLIOS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(portfolios_dict, f, indent=2, ensure_ascii=False)
+        return True
+    except Exception as e:
+        logger.error(f"Erro ao salvar arquivo: {str(e)}")
+        return False
+
+
+# ==========================================
 # GERENCIADOR DE PORTFÓLIOS
 # ==========================================
 
@@ -157,20 +207,8 @@ class PortfolioManager:
     
     def __init__(self):
         """Inicializa o gerenciador"""
-        self._inicializar_session_state()
-        self._criar_diretorio()
-    
-    def _inicializar_session_state(self):
-        """Inicializa dados no session_state"""
-        if 'portfolios' not in st.session_state:
-            st.session_state.portfolios = {}
-        
-        if 'portfolio_ativo' not in st.session_state:
-            st.session_state.portfolio_ativo = None
-    
-    def _criar_diretorio(self):
-        """Cria diretório para salvar portfólios"""
-        os.makedirs(PORTFOLIOS_DIR, exist_ok=True)
+        _garantir_session_state()
+        _garantir_diretorio()
     
     # ==========================================
     # OPERAÇÕES CRUD
@@ -186,6 +224,8 @@ class PortfolioManager:
         Returns:
             True se criado com sucesso
         """
+        _garantir_session_state()
+        
         if portfolio.nome in st.session_state.portfolios:
             logger.warning(f"Portfólio '{portfolio.nome}' já existe")
             return False
@@ -204,28 +244,25 @@ class PortfolioManager:
         Returns:
             True se salvo com sucesso
         """
+        _garantir_session_state()
+        
         if nome not in st.session_state.portfolios:
-            logger.error(f"Portfólio '{nome}' não encontrado")
+            logger.error(f"Portfólio '{nome}' não encontrado na sessão")
             return False
         
-        try:
-            # Carregar portfólios existentes
-            portfolios_salvos = self._carregar_arquivo()
-            
-            # Adicionar/atualizar
-            portfolio = st.session_state.portfolios[nome]
-            portfolios_salvos[nome] = portfolio.to_dict()
-            
-            # Salvar arquivo
-            with open(PORTFOLIOS_FILE, 'w', encoding='utf-8') as f:
-                json.dump(portfolios_salvos, f, indent=2, ensure_ascii=False)
-            
+        # Carregar portfólios existentes
+        portfolios_salvos = _carregar_arquivo()
+        
+        # Adicionar/atualizar
+        portfolio = st.session_state.portfolios[nome]
+        portfolios_salvos[nome] = portfolio.to_dict()
+        
+        # Salvar arquivo
+        if _salvar_arquivo(portfolios_salvos):
             logger.info(f"Portfólio '{nome}' salvo em arquivo")
             return True
-            
-        except Exception as e:
-            logger.error(f"Erro ao salvar portfólio: {str(e)}")
-            return False
+        
+        return False
     
     def carregar(self, nome: str) -> Optional[Portfolio]:
         """
@@ -237,16 +274,22 @@ class PortfolioManager:
         Returns:
             Portfolio ou None
         """
+        _garantir_session_state()
+        
         # Tentar carregar da sessão primeiro
         if nome in st.session_state.portfolios:
             return st.session_state.portfolios[nome]
         
         # Tentar carregar do arquivo
-        portfolios_salvos = self._carregar_arquivo()
+        portfolios_salvos = _carregar_arquivo()
         if nome in portfolios_salvos:
-            portfolio = Portfolio.from_dict(portfolios_salvos[nome])
-            st.session_state.portfolios[nome] = portfolio
-            return portfolio
+            try:
+                portfolio = Portfolio.from_dict(portfolios_salvos[nome])
+                st.session_state.portfolios[nome] = portfolio
+                return portfolio
+            except Exception as e:
+                logger.error(f"Erro ao criar Portfolio de '{nome}': {str(e)}")
+                return None
         
         logger.warning(f"Portfólio '{nome}' não encontrado")
         return None
@@ -262,6 +305,8 @@ class PortfolioManager:
         Returns:
             True se deletado com sucesso
         """
+        _garantir_session_state()
+        
         # Deletar da sessão
         if nome in st.session_state.portfolios:
             del st.session_state.portfolios[nome]
@@ -269,16 +314,11 @@ class PortfolioManager:
         
         # Deletar do arquivo
         if deletar_arquivo:
-            try:
-                portfolios_salvos = self._carregar_arquivo()
-                if nome in portfolios_salvos:
-                    del portfolios_salvos[nome]
-                    with open(PORTFOLIOS_FILE, 'w', encoding='utf-8') as f:
-                        json.dump(portfolios_salvos, f, indent=2, ensure_ascii=False)
-                    logger.info(f"Portfólio '{nome}' removido do arquivo")
-            except Exception as e:
-                logger.error(f"Erro ao deletar portfólio do arquivo: {str(e)}")
-                return False
+            portfolios_salvos = _carregar_arquivo()
+            if nome in portfolios_salvos:
+                del portfolios_salvos[nome]
+                _salvar_arquivo(portfolios_salvos)
+                logger.info(f"Portfólio '{nome}' removido do arquivo")
         
         # Se era o ativo, limpar
         if st.session_state.portfolio_ativo == nome:
@@ -296,10 +336,12 @@ class PortfolioManager:
         Returns:
             Lista de nomes de portfólios
         """
+        _garantir_session_state()
+        
         nomes = set(st.session_state.portfolios.keys())
         
         if incluir_arquivo:
-            portfolios_salvos = self._carregar_arquivo()
+            portfolios_salvos = _carregar_arquivo()
             nomes.update(portfolios_salvos.keys())
         
         return sorted(list(nomes))
@@ -333,6 +375,8 @@ class PortfolioManager:
         Returns:
             True se definido com sucesso
         """
+        _garantir_session_state()
+        
         portfolio = self.carregar(nome)
         if portfolio:
             st.session_state.portfolio_ativo = nome
@@ -347,58 +391,45 @@ class PortfolioManager:
         Returns:
             Portfolio ativo ou None
         """
+        _garantir_session_state()
+        
         if st.session_state.portfolio_ativo:
             return self.carregar(st.session_state.portfolio_ativo)
         return None
     
     # ==========================================
-    # ARQUIVO
+    # OPERAÇÕES EM LOTE
     # ==========================================
-    
-    def _carregar_arquivo(self) -> Dict[str, Dict]:
-        """Carrega portfólios do arquivo"""
-        if not os.path.exists(PORTFOLIOS_FILE):
-            return {}
-        
-        try:
-            with open(PORTFOLIOS_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception as e:
-            logger.error(f"Erro ao carregar arquivo: {str(e)}")
-            return {}
     
     def salvar_todos(self) -> bool:
         """Salva todos os portfólios da sessão em arquivo"""
-        try:
-            portfolios_dict = {}
-            for nome, portfolio in st.session_state.portfolios.items():
-                portfolios_dict[nome] = portfolio.to_dict()
-            
-            with open(PORTFOLIOS_FILE, 'w', encoding='utf-8') as f:
-                json.dump(portfolios_dict, f, indent=2, ensure_ascii=False)
-            
+        _garantir_session_state()
+        
+        portfolios_dict = {}
+        for nome, portfolio in st.session_state.portfolios.items():
+            portfolios_dict[nome] = portfolio.to_dict()
+        
+        if _salvar_arquivo(portfolios_dict):
             logger.info(f"{len(portfolios_dict)} portfólios salvos")
             return True
-            
-        except Exception as e:
-            logger.error(f"Erro ao salvar todos: {str(e)}")
-            return False
+        
+        return False
     
     def carregar_todos(self) -> bool:
         """Carrega todos os portfólios do arquivo para sessão"""
-        try:
-            portfolios_salvos = self._carregar_arquivo()
-            
-            for nome, data in portfolios_salvos.items():
+        _garantir_session_state()
+        
+        portfolios_salvos = _carregar_arquivo()
+        
+        for nome, data in portfolios_salvos.items():
+            try:
                 portfolio = Portfolio.from_dict(data)
                 st.session_state.portfolios[nome] = portfolio
-            
-            logger.info(f"{len(portfolios_salvos)} portfólios carregados")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Erro ao carregar todos: {str(e)}")
-            return False
+            except Exception as e:
+                logger.error(f"Erro ao carregar '{nome}': {str(e)}")
+        
+        logger.info(f"{len(portfolios_salvos)} portfólios carregados")
+        return True
     
     # ==========================================
     # COMPARAÇÃO
@@ -450,8 +481,12 @@ def criar_portfolio(
     descricao: str = ""
 ) -> bool:
     """Cria novo portfólio"""
-    portfolio = Portfolio(nome, tickers, pesos, data_inicio, data_fim, descricao)
-    return portfolio_manager.criar(portfolio)
+    try:
+        portfolio = Portfolio(nome, tickers, pesos, data_inicio, data_fim, descricao)
+        return portfolio_manager.criar(portfolio)
+    except Exception as e:
+        logger.error(f"Erro ao criar portfólio: {str(e)}")
+        return False
 
 
 def salvar_portfolio(nome: str) -> bool:
