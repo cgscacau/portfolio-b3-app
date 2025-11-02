@@ -8,13 +8,12 @@ import pandas as pd
 import numpy as np
 import sys
 from pathlib import Path
-from datetime import datetime
 
 # Adicionar diretório raiz ao path
-root_dir = Path(__file__).parent.parent.parent
+root_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(root_dir))
 
-from core import data, metrics, opt, filters, ui
+from core import data, metrics, opt, filters, ui, utils
 import logging
 
 logger = logging.getLogger(__name__)
@@ -29,66 +28,33 @@ st.set_page_config(
 
 def initialize_session_state():
     """Inicializa variáveis de sessão."""
-    if 'selected_tickers' not in st.session_state:
-        st.session_state.selected_tickers = []
-    
-    if 'price_data' not in st.session_state:
-        st.session_state.price_data = pd.DataFrame()
-    
-    if 'expected_returns' not in st.session_state:
-        st.session_state.expected_returns = pd.Series()
-    
-    if 'cov_matrix' not in st.session_state:
-        st.session_state.cov_matrix = pd.DataFrame()
-    
-    if 'efficient_frontier' not in st.session_state:
-        st.session_state.efficient_frontier = pd.DataFrame()
-    
-    if 'optimized_portfolios' not in st.session_state:
-        st.session_state.optimized_portfolios = {}
+    utils.ensure_session_state_initialized()
 
 
 def check_prerequisites():
-    """Verifica se há dados necessários."""
+    """Verifica pré-requisitos."""
     if not st.session_state.selected_tickers:
-        ui.create_info_box(
-            "⚠️ Nenhum ativo selecionado. Por favor, vá para a página 'Selecionar Ativos' primeiro.",
-            "warning"
-        )
-        
-        if st.button("🎯 Ir para Seleção de Ativos", type="primary"):
-            st.switch_page("app/pages/01_Selecionar_Ativos.py")
-        
+        st.warning("⚠️ Nenhum ativo selecionado")
+        st.info("👉 Vá para **Selecionar Ativos** no menu lateral")
         return False
     
-    if st.session_state.price_data.empty:
-        ui.create_info_box(
-            "⚠️ Dados de preços não carregados. Por favor, carregue os dados na página 'Análise de Dividendos'.",
-            "warning"
-        )
-        
-        if st.button("💸 Ir para Análise de Dividendos", type="primary"):
-            st.switch_page("app/pages/02_Análise_de_Dividendos.py")
-        
+    if st.session_state.price_data is None or st.session_state.price_data.empty:
+        st.warning("⚠️ Dados não carregados")
+        st.info("👉 Vá para **Análise de Dividendos** e carregue os dados")
         return False
     
     return True
 
 
 def calculate_portfolio_inputs():
-    """Calcula retornos esperados e matriz de covariância."""
+    """Calcula retornos esperados e covariância."""
     
-    ui.create_section_header(
-        "🧮 Cálculo de Parâmetros",
-        "Preparando dados para otimização",
-        "🧮"
-    )
+    st.markdown("### 🧮 Cálculo de Parâmetros")
     
     if st.session_state.price_data.empty:
-        st.error("❌ Dados de preços não disponíveis")
+        st.error("❌ Sem dados de preços")
         return False
     
-    # Informações do período
     prices_df = st.session_state.price_data
     
     col1, col2, col3 = st.columns(3)
@@ -101,42 +67,37 @@ def calculate_portfolio_inputs():
     
     with col3:
         years = len(prices_df) / 252
-        st.info(f"⏱️ **Duração:** {years:.1f} anos")
+        st.info(f"⏱️ **Anos:** {years:.1f}")
     
-    if st.button("🔄 Calcular/Atualizar Parâmetros", type="primary", use_container_width=True):
+    if st.button("🔄 Calcular", type="primary", use_container_width=True, key="btn_calc_params"):
         
-        with st.spinner("Calculando retornos esperados e covariância..."):
+        with st.spinner("Calculando..."):
             
-            # Criar objeto de métricas
             perf_metrics = metrics.PerformanceMetrics(
                 prices_df,
                 risk_free_rate=st.session_state.risk_free_rate
             )
             
-            # Retornos esperados (anualizados)
-            expected_returns = pd.Series(
-                {ticker: perf_metrics.calculate_annualized_return(ticker) 
-                 for ticker in prices_df.columns}
-            )
+            # Retornos anualizados
+            expected_returns = pd.Series({
+                ticker: perf_metrics.calculate_annualized_return(ticker) 
+                for ticker in prices_df.columns
+            }).dropna()
             
-            # Remover NaN
-            expected_returns = expected_returns.dropna()
-            
-            # Matriz de covariância (anualizada)
+            # Covariância anualizada
             cov_matrix = perf_metrics.get_covariance_matrix(annualized=True)
             
             # Alinhar
-            common_tickers = expected_returns.index.intersection(cov_matrix.index)
-            expected_returns = expected_returns[common_tickers]
-            cov_matrix = cov_matrix.loc[common_tickers, common_tickers]
+            common = expected_returns.index.intersection(cov_matrix.index)
+            expected_returns = expected_returns[common]
+            cov_matrix = cov_matrix.loc[common, common]
             
-            # Salvar
             st.session_state.expected_returns = expected_returns
             st.session_state.cov_matrix = cov_matrix
             
-            st.success("✅ Parâmetros calculados com sucesso!")
+            st.success("✅ Parâmetros calculados!")
             
-            # Estatísticas
+            # Stats
             col1, col2, col3, col4 = st.columns(4)
             
             with col1:
@@ -148,27 +109,25 @@ def calculate_portfolio_inputs():
             
             with col2:
                 ui.create_metric_card(
-                    "Retorno Máximo",
+                    "Retorno Máx",
                     f"{expected_returns.max()*100:.2f}%",
                     icon="🔝"
                 )
             
             with col3:
                 ui.create_metric_card(
-                    "Retorno Mínimo",
+                    "Retorno Mín",
                     f"{expected_returns.min()*100:.2f}%",
                     icon="📉"
                 )
             
             with col4:
-                avg_corr = cov_matrix.values[np.triu_indices_from(cov_matrix.values, k=1)].mean()
-                # Converter covariância para correlação
                 std_devs = np.sqrt(np.diag(cov_matrix))
                 corr_matrix = cov_matrix / np.outer(std_devs, std_devs)
                 avg_corr = corr_matrix.values[np.triu_indices_from(corr_matrix.values, k=1)].mean()
                 
                 ui.create_metric_card(
-                    "Correlação Média",
+                    "Corr. Média",
                     f"{avg_corr:.3f}",
                     icon="🔗"
                 )
@@ -179,128 +138,106 @@ def calculate_portfolio_inputs():
 
 
 def show_input_statistics():
-    """Exibe estatísticas dos dados de entrada."""
+    """Estatísticas dos dados."""
     
-    if st.session_state.expected_returns.empty or st.session_state.cov_matrix.empty:
-        ui.create_info_box(
-            "Calcule os parâmetros usando o botão acima para visualizar as estatísticas.",
-            "info"
-        )
+    if st.session_state.expected_returns is None or st.session_state.expected_returns.empty:
+        st.info("ℹ️ Calcule os parâmetros acima")
         return
     
-    ui.create_section_header(
-        "📊 Estatísticas dos Dados",
-        "Análise dos retornos esperados e correlações",
-        "📊"
-    )
+    st.markdown("### 📊 Estatísticas")
     
     col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown("### 📈 Retornos Esperados")
+        st.markdown("#### 📈 Retornos")
         
-        # Criar DataFrame
         returns_df = pd.DataFrame({
             'Ticker': st.session_state.expected_returns.index,
-            'Retorno Anualizado': st.session_state.expected_returns.values * 100
-        })
+            'Retorno (%)': st.session_state.expected_returns.values * 100
+        }).sort_values('Retorno (%)', ascending=False)
         
-        returns_df = returns_df.sort_values('Retorno Anualizado', ascending=False)
-        returns_df['Retorno Anualizado'] = returns_df['Retorno Anualizado'].apply(lambda x: f"{x:.2f}%")
+        returns_df['Retorno (%)'] = returns_df['Retorno (%)'].apply(lambda x: f"{x:.2f}%")
         
         st.dataframe(returns_df, use_container_width=True, height=400)
     
     with col2:
-        st.markdown("### 🔗 Matriz de Correlação")
+        st.markdown("#### 🔗 Correlação")
         
-        # Converter covariância para correlação
         std_devs = np.sqrt(np.diag(st.session_state.cov_matrix))
         corr_matrix = st.session_state.cov_matrix / np.outer(std_devs, std_devs)
         
-        # Heatmap
-        fig = ui.plot_correlation_heatmap(corr_matrix, "Correlação entre Ativos")
+        fig = ui.plot_correlation_heatmap(corr_matrix, "Correlação")
         st.plotly_chart(fig, use_container_width=True)
 
 
 def compute_efficient_frontier():
-    """Computa a fronteira eficiente."""
+    """Computa fronteira eficiente."""
     
-    if st.session_state.expected_returns.empty or st.session_state.cov_matrix.empty:
+    if st.session_state.expected_returns is None or st.session_state.expected_returns.empty:
         return
     
-    ui.create_section_header(
-        "🎯 Fronteira Eficiente",
-        "Calculando portfólios ótimos",
-        "🎯"
-    )
+    st.markdown("### 🎯 Fronteira Eficiente")
     
-    # Parâmetros
     col1, col2, col3 = st.columns(3)
     
     with col1:
         n_points = st.slider(
-            "Número de pontos na fronteira:",
+            "Pontos na fronteira:",
             min_value=20,
             max_value=100,
             value=50,
             step=10,
-            help="Mais pontos = maior precisão, mas mais lento"
+            key="frontier_n_points"
         )
     
     with col2:
         max_weight = st.slider(
-            "Peso máximo por ativo (%):",
+            "Peso máx/ativo (%):",
             min_value=5,
             max_value=100,
             value=int(st.session_state.max_weight_per_asset * 100),
-            step=5
+            step=5,
+            key="frontier_max_weight"
         ) / 100
     
     with col3:
         min_weight = st.slider(
-            "Peso mínimo por ativo (%):",
+            "Peso mín/ativo (%):",
             min_value=0,
             max_value=10,
             value=0,
-            step=1
+            step=1,
+            key="frontier_min_weight"
         ) / 100
     
     # Restrições setoriais
-    apply_sector_constraints = st.checkbox(
+    apply_sector = st.checkbox(
         "Aplicar restrições setoriais",
         value=True,
-        help="Limita concentração por setor"
+        key="frontier_sector_check"
     )
     
-    sector_constraints = None
-    if apply_sector_constraints and not st.session_state.universe_df.empty:
-        max_sector_weight = st.slider(
-            "Peso máximo por setor (%):",
+    if apply_sector and not st.session_state.universe_df.empty:
+        max_sector = st.slider(
+            "Peso máx/setor (%):",
             min_value=10,
             max_value=100,
             value=int(st.session_state.max_weight_per_sector * 100),
-            step=5
+            step=5,
+            key="frontier_max_sector"
         ) / 100
-        
-        sector_constraints = opt.create_sector_constraints(
-            st.session_state.universe_df,
-            st.session_state.expected_returns.index.tolist(),
-            max_sector_weight
-        )
     
-    if st.button("🚀 Calcular Fronteira Eficiente", type="primary", use_container_width=True):
+    if st.button("🚀 Calcular Fronteira", type="primary", use_container_width=True, key="btn_calc_frontier"):
         
-        with st.spinner("Calculando fronteira eficiente... Isso pode levar alguns minutos."):
+        with st.spinner("Calculando fronteira... Pode levar alguns minutos."):
             
             try:
-                # Criar otimizador
                 optimizer = opt.MarkowitzOptimizer(
                     st.session_state.expected_returns,
                     st.session_state.cov_matrix,
                     st.session_state.risk_free_rate
                 )
                 
-                # Computar fronteira
                 frontier_df = optimizer.compute_efficient_frontier(
                     n_points=n_points,
                     max_weight=max_weight,
@@ -308,82 +245,52 @@ def compute_efficient_frontier():
                 )
                 
                 if frontier_df.empty:
-                    st.error("❌ Erro ao calcular fronteira eficiente")
+                    st.error("❌ Erro ao calcular fronteira")
                     return
                 
                 st.session_state.efficient_frontier = frontier_df
                 
-                st.success(f"✅ Fronteira calculada com {len(frontier_df)} pontos!")
+                st.success(f"✅ Fronteira com {len(frontier_df)} pontos!")
                 
-                # Estatísticas da fronteira
+                # Stats
                 col1, col2, col3, col4 = st.columns(4)
                 
                 with col1:
-                    min_vol_idx = frontier_df['volatility'].idxmin()
-                    min_vol = frontier_df.loc[min_vol_idx, 'volatility']
-                    
-                    ui.create_metric_card(
-                        "Mínima Volatilidade",
-                        f"{min_vol*100:.2f}%",
-                        icon="🛡️"
-                    )
+                    min_vol = frontier_df['volatility'].min()
+                    ui.create_metric_card("Mín Vol", f"{min_vol*100:.2f}%", icon="🛡️")
                 
                 with col2:
-                    max_ret_idx = frontier_df['return'].idxmax()
-                    max_ret = frontier_df.loc[max_ret_idx, 'return']
-                    
-                    ui.create_metric_card(
-                        "Máximo Retorno",
-                        f"{max_ret*100:.2f}%",
-                        icon="📈"
-                    )
+                    max_ret = frontier_df['return'].max()
+                    ui.create_metric_card("Máx Ret", f"{max_ret*100:.2f}%", icon="📈")
                 
                 with col3:
-                    max_sharpe_idx = frontier_df['sharpe'].idxmax()
-                    max_sharpe = frontier_df.loc[max_sharpe_idx, 'sharpe']
-                    
-                    ui.create_metric_card(
-                        "Máximo Sharpe",
-                        f"{max_sharpe:.3f}",
-                        icon="⭐"
-                    )
+                    max_sharpe = frontier_df['sharpe'].max()
+                    ui.create_metric_card("Máx Sharpe", f"{max_sharpe:.3f}", icon="⭐")
                 
                 with col4:
-                    # Retorno do ponto de máximo Sharpe
+                    max_sharpe_idx = frontier_df['sharpe'].idxmax()
                     sharpe_ret = frontier_df.loc[max_sharpe_idx, 'return']
-                    
-                    ui.create_metric_card(
-                        "Retorno (Max Sharpe)",
-                        f"{sharpe_ret*100:.2f}%",
-                        icon="🎯"
-                    )
+                    ui.create_metric_card("Ret (Sharpe)", f"{sharpe_ret*100:.2f}%", icon="🎯")
                 
                 st.rerun()
             
             except Exception as e:
-                logger.error(f"Erro ao calcular fronteira: {e}")
-                st.error(f"❌ Erro ao calcular fronteira: {e}")
+                logger.error(f"Erro: {e}")
+                st.error(f"❌ Erro: {e}")
 
 
 def show_efficient_frontier_plot():
-    """Exibe gráfico da fronteira eficiente."""
+    """Exibe gráfico da fronteira."""
     
-    if st.session_state.efficient_frontier.empty:
-        ui.create_info_box(
-            "Calcule a fronteira eficiente usando o botão acima para visualizar o gráfico.",
-            "info"
-        )
+    if st.session_state.efficient_frontier is None or st.session_state.efficient_frontier.empty:
+        st.info("ℹ️ Calcule a fronteira acima")
         return
     
-    ui.create_section_header(
-        "📊 Visualização da Fronteira",
-        "Gráfico interativo risco vs retorno",
-        "📊"
-    )
+    st.markdown("### 📊 Visualização")
     
     frontier_df = st.session_state.efficient_frontier
     
-    # Identificar portfólios especiais
+    # Identificar pontos especiais
     max_sharpe_idx = frontier_df['sharpe'].idxmax()
     min_vol_idx = frontier_df['volatility'].idxmin()
     
@@ -392,63 +299,44 @@ def show_efficient_frontier_plot():
             frontier_df.loc[max_sharpe_idx, 'return'],
             frontier_df.loc[max_sharpe_idx, 'volatility']
         ),
-        'Mínima Volatilidade': (
+        'Mínima Vol': (
             frontier_df.loc[min_vol_idx, 'return'],
             frontier_df.loc[min_vol_idx, 'volatility']
         )
     }
     
-    # Plotar
-    fig = ui.plot_efficient_frontier(
-        frontier_df,
-        highlighted_portfolios=highlighted,
-        title="Fronteira Eficiente de Markowitz"
-    )
-    
+    fig = ui.plot_efficient_frontier(frontier_df, highlighted, "Fronteira Eficiente")
     st.plotly_chart(fig, use_container_width=True)
     
     # Explicação
-    with st.expander("ℹ️ Como interpretar a fronteira eficiente?", expanded=False):
+    with st.expander("ℹ️ Como interpretar?", expanded=False):
         st.markdown("""
-        A **Fronteira Eficiente** representa todos os portfólios que oferecem o **máximo retorno esperado** 
-        para cada nível de risco (volatilidade).
+        **Fronteira Eficiente:** Portfólios com máximo retorno para cada nível de risco.
         
         **Pontos-chave:**
+        - **Máximo Sharpe** ⭐: Melhor risco-retorno
+        - **Mínima Vol** 🛡️: Menor risco possível
         
-        - **Máximo Sharpe** ⭐: Melhor relação risco-retorno ajustada pela taxa livre de risco
-        - **Mínima Volatilidade** 🛡️: Portfólio com menor risco possível
-        - **Cores**: Indicam o Índice de Sharpe (quanto mais claro, melhor)
-        
-        **Interpretação:**
-        - Portfólios **acima** da fronteira são impossíveis
-        - Portfólios **abaixo** são ineficientes (existe alternativa melhor)
-        - Portfólios **na fronteira** são ótimos para seu nível de risco
-        
-        **Escolha seu portfólio:**
-        - **Conservador**: Próximo à Mínima Volatilidade
+        **Escolha:**
+        - **Conservador**: Próximo à Mínima Vol
         - **Balanceado**: Próximo ao Máximo Sharpe
-        - **Agressivo**: Maior retorno (aceita mais risco)
+        - **Agressivo**: Maior retorno (mais risco)
         """)
 
 
 def optimize_target_portfolio():
-    """Otimiza portfólio para alvo específico."""
+    """Otimiza para alvo específico."""
     
-    if st.session_state.expected_returns.empty or st.session_state.cov_matrix.empty:
+    if st.session_state.expected_returns is None or st.session_state.expected_returns.empty:
         return
     
-    ui.create_section_header(
-        "🎯 Portfólio Alvo",
-        "Otimize para retorno ou risco específico",
-        "🎯"
-    )
+    st.markdown("### 🎯 Portfólio Alvo")
     
-    # Escolher tipo de otimização
     opt_type = st.radio(
-        "Tipo de otimização:",
+        "Tipo:",
         ["Retorno Alvo", "Risco Alvo"],
         horizontal=True,
-        help="Escolha se quer fixar o retorno ou o risco"
+        key="target_opt_type"
     )
     
     col1, col2 = st.columns(2)
@@ -456,38 +344,39 @@ def optimize_target_portfolio():
     with col1:
         if opt_type == "Retorno Alvo":
             target_return = st.slider(
-                "Retorno anualizado alvo (%):",
+                "Retorno alvo (%):",
                 min_value=float(st.session_state.expected_returns.min() * 100),
                 max_value=float(st.session_state.expected_returns.max() * 100),
                 value=float(st.session_state.expected_returns.mean() * 100),
-                step=0.5
+                step=0.5,
+                key="target_return_slider"
             ) / 100
         else:
-            # Estimar range de volatilidade
             min_vol = st.session_state.cov_matrix.values.diagonal().min() ** 0.5
             max_vol = st.session_state.cov_matrix.values.diagonal().max() ** 0.5
             
             target_vol = st.slider(
-                "Volatilidade anualizada alvo (%):",
+                "Volatilidade alvo (%):",
                 min_value=float(min_vol * 100),
                 max_value=float(max_vol * 100),
                 value=float((min_vol + max_vol) / 2 * 100),
-                step=0.5
+                step=0.5,
+                key="target_vol_slider"
             ) / 100
     
     with col2:
         max_weight_target = st.slider(
-            "Peso máximo por ativo (%):",
+            "Peso máx (%):",
             min_value=5,
             max_value=100,
             value=15,
             step=5,
-            key="target_max_weight"
+            key="target_max_weight_slider"
         ) / 100
     
-    if st.button("🎯 Otimizar Portfólio Alvo", type="primary", use_container_width=True):
+    if st.button("🎯 Otimizar", type="primary", use_container_width=True, key="btn_optimize_target"):
         
-        with st.spinner("Otimizando portfólio..."):
+        with st.spinner("Otimizando..."):
             
             try:
                 optimizer = opt.MarkowitzOptimizer(
@@ -508,10 +397,10 @@ def optimize_target_portfolio():
                     )
                 
                 if not weights:
-                    st.error("❌ Não foi possível otimizar com os parâmetros fornecidos")
+                    st.error("❌ Não foi possível otimizar")
                     return
                 
-                # Calcular estatísticas
+                # Stats
                 stats = opt.calculate_portfolio_stats(
                     weights,
                     st.session_state.expected_returns,
@@ -525,14 +414,14 @@ def optimize_target_portfolio():
                     'stats': stats
                 }
                 
-                st.success("✅ Portfólio otimizado com sucesso!")
+                st.success("✅ Otimizado!")
                 
-                # Exibir resultados
+                # Métricas
                 col1, col2, col3, col4 = st.columns(4)
                 
                 with col1:
                     ui.create_metric_card(
-                        "Retorno Esperado",
+                        "Retorno",
                         f"{stats['expected_return']*100:.2f}%",
                         icon="📈"
                     )
@@ -546,55 +435,47 @@ def optimize_target_portfolio():
                 
                 with col3:
                     ui.create_metric_card(
-                        "Sharpe Ratio",
+                        "Sharpe",
                         f"{stats['sharpe_ratio']:.3f}",
                         icon="⭐"
                     )
                 
                 with col4:
                     ui.create_metric_card(
-                        "Nº de Ativos",
+                        "Nº Ativos",
                         f"{stats['num_assets']}",
                         icon="🎯"
                     )
                 
                 # Alocação
-                st.markdown("### 📊 Alocação do Portfólio")
+                st.markdown("### 📊 Alocação")
                 
-                fig = ui.plot_portfolio_weights(weights, "Alocação - Portfólio Alvo")
+                fig = ui.plot_portfolio_weights(weights, "Portfólio Alvo")
                 st.plotly_chart(fig, use_container_width=True)
                 
-                # Tabela de pesos
+                # Tabela
                 weights_df = pd.DataFrame({
                     'Ticker': list(weights.keys()),
                     'Peso (%)': [w * 100 for w in weights.values()]
-                })
-                weights_df = weights_df.sort_values('Peso (%)', ascending=False)
+                }).sort_values('Peso (%)', ascending=False)
                 
                 st.dataframe(weights_df, use_container_width=True)
             
             except Exception as e:
-                logger.error(f"Erro na otimização: {e}")
-                st.error(f"❌ Erro na otimização: {e}")
+                logger.error(f"Erro: {e}")
+                st.error(f"❌ Erro: {e}")
 
 
 def show_saved_portfolios():
-    """Exibe portfólios salvos."""
+    """Portfólios salvos."""
     
     if not st.session_state.optimized_portfolios:
-        ui.create_info_box(
-            "Nenhum portfólio otimizado ainda. Use as ferramentas acima para criar portfólios.",
-            "info"
-        )
+        st.info("ℹ️ Nenhum portfólio otimizado ainda")
         return
     
-    ui.create_section_header(
-        "💼 Portfólios Salvos",
-        "Comparação dos portfólios otimizados",
-        "💼"
-    )
+    st.markdown("### 💼 Portfólios Salvos")
     
-    # Criar DataFrame de comparação
+    # Comparação
     comparison_data = []
     
     for name, portfolio in st.session_state.optimized_portfolios.items():
@@ -609,7 +490,7 @@ def show_saved_portfolios():
     
     comparison_df = pd.DataFrame(comparison_data)
     
-    # Formatar para exibição
+    # Formatar
     display_df = comparison_df.copy()
     display_df['Retorno'] = display_df['Retorno'].apply(lambda x: f"{x*100:.2f}%")
     display_df['Volatilidade'] = display_df['Volatilidade'].apply(lambda x: f"{x*100:.2f}%")
@@ -617,9 +498,9 @@ def show_saved_portfolios():
     
     st.dataframe(display_df, use_container_width=True)
     
-    # Gráfico de comparação
+    # Gráfico
     if len(comparison_df) > 1:
-        st.markdown("### 📊 Comparação Visual")
+        st.markdown("### 📊 Comparação")
         
         import plotly.graph_objects as go
         
@@ -635,28 +516,16 @@ def show_saved_portfolios():
                 textposition='top center',
                 marker=dict(size=15, line=dict(width=2, color='white')),
                 hovertemplate=f"<b>{row['Portfólio']}</b><br>" +
-                             'Retorno: %{y:.2f}%<br>' +
-                             'Volatilidade: %{x:.2f}%<br>' +
-                             f"Sharpe: {row['Sharpe']:.3f}<br>" +
-                             '<extra></extra>'
+                             'Ret: %{y:.2f}%<br>' +
+                             'Vol: %{x:.2f}%<br>' +
+                             f"Sharpe: {row['Sharpe']:.3f}<extra></extra>"
             ))
         
         fig.update_layout(
-            title="Comparação de Portfólios",
+            title="Comparação",
             xaxis_title="Volatilidade (%)",
             yaxis_title="Retorno (%)",
             template='plotly_dark',
-            hovermode='closest',
-            showlegend=True,
-            legend=dict(
-                yanchor="top",
-                y=0.99,
-                xanchor="left",
-                x=0.01,
-                bgcolor='rgba(38, 39, 48, 0.8)',
-                bordercolor=ui.COLORS['primary'],
-                borderwidth=1
-            ),
             plot_bgcolor=ui.COLORS['background'],
             paper_bgcolor=ui.COLORS['background'],
             font=dict(color=ui.COLORS['text']),
@@ -665,70 +534,66 @@ def show_saved_portfolios():
         
         st.plotly_chart(fig, use_container_width=True)
     
-    # Detalhes de cada portfólio
-    st.markdown("### 📋 Detalhes dos Portfólios")
+    # Detalhes
+    st.markdown("### 📋 Detalhes")
     
-    selected_portfolio = st.selectbox(
-        "Selecione um portfólio para ver detalhes:",
-        options=list(st.session_state.optimized_portfolios.keys())
+    selected = st.selectbox(
+        "Selecione um portfólio:",
+        options=list(st.session_state.optimized_portfolios.keys()),
+        key="portfolio_detail_select"
     )
     
-    if selected_portfolio:
-        portfolio = st.session_state.optimized_portfolios[selected_portfolio]
+    if selected:
+        portfolio = st.session_state.optimized_portfolios[selected]
         weights = portfolio['weights']
         
         col1, col2 = st.columns(2)
         
         with col1:
             st.markdown("#### 📊 Alocação")
-            fig = ui.plot_portfolio_weights(weights, f"Alocação - {selected_portfolio}")
+            fig = ui.plot_portfolio_weights(weights, selected)
             st.plotly_chart(fig, use_container_width=True)
         
         with col2:
-            st.markdown("#### 📋 Pesos Detalhados")
+            st.markdown("#### 📋 Pesos")
             
             weights_df = pd.DataFrame({
                 'Ticker': list(weights.keys()),
                 'Peso (%)': [w * 100 for w in weights.values()]
-            })
-            weights_df = weights_df.sort_values('Peso (%)', ascending=False)
+            }).sort_values('Peso (%)', ascending=False)
             
             st.dataframe(weights_df, use_container_width=True, height=400)
         
         # Download
-        ui.create_download_button(
-            weights_df,
-            f"{selected_portfolio.replace(' ', '_')}_weights.csv",
-            "📥 Download Alocação",
-            "csv"
+        csv = weights_df.to_csv(index=False)
+        st.download_button(
+            "📥 Download",
+            csv,
+            f"{selected.replace(' ', '_')}.csv",
+            use_container_width=True,
+            key=f"btn_download_{selected.replace(' ', '_')}"
         )
 
 
-def show_equal_weight_baseline():
-    """Cria portfólio equally weighted como baseline."""
+def show_equal_weight():
+    """Portfólio equally weighted."""
     
-    if st.session_state.expected_returns.empty:
+    if st.session_state.expected_returns is None or st.session_state.expected_returns.empty:
         return
     
-    ui.create_section_header(
-        "⚖️ Portfólio Equally Weighted (Baseline)",
-        "Comparação com alocação uniforme",
-        "⚖️"
-    )
+    st.markdown("### ⚖️ Equally Weighted (Baseline)")
     
     st.markdown("""
-    O portfólio **Equally Weighted** aloca peso igual para todos os ativos, 
-    servindo como **baseline** para comparação com portfólios otimizados.
+    Alocação uniforme como **baseline** para comparação.
     """)
     
-    if st.button("⚖️ Criar Portfólio Equally Weighted", use_container_width=True):
+    if st.button("⚖️ Criar", use_container_width=True, key="btn_create_ew"):
         
         tickers = st.session_state.expected_returns.index.tolist()
         
         ew_optimizer = opt.EqualWeightOptimizer(tickers)
         weights = ew_optimizer.optimize()
         
-        # Calcular estatísticas
         stats = opt.calculate_portfolio_stats(
             weights,
             st.session_state.expected_returns,
@@ -736,94 +601,71 @@ def show_equal_weight_baseline():
             st.session_state.risk_free_rate
         )
         
-        # Salvar
         st.session_state.optimized_portfolios['Equally Weighted'] = {
             'weights': weights,
             'stats': stats
         }
         
-        st.success("✅ Portfólio Equally Weighted criado!")
+        st.success("✅ Equally Weighted criado!")
         
-        # Exibir métricas
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            ui.create_metric_card(
-                "Retorno Esperado",
-                f"{stats['expected_return']*100:.2f}%",
-                icon="📈"
-            )
+            ui.create_metric_card("Retorno", f"{stats['expected_return']*100:.2f}%", icon="📈")
         
         with col2:
-            ui.create_metric_card(
-                "Volatilidade",
-                f"{stats['volatility']*100:.2f}%",
-                icon="📊"
-            )
+            ui.create_metric_card("Volatilidade", f"{stats['volatility']*100:.2f}%", icon="📊")
         
         with col3:
-            ui.create_metric_card(
-                "Sharpe Ratio",
-                f"{stats['sharpe_ratio']:.3f}",
-                icon="⭐"
-            )
+            ui.create_metric_card("Sharpe", f"{stats['sharpe_ratio']:.3f}", icon="⭐")
         
         with col4:
-            ui.create_metric_card(
-                "Peso por Ativo",
-                f"{100/len(tickers):.2f}%",
-                icon="⚖️"
-            )
+            ui.create_metric_card("Peso/Ativo", f"{100/len(tickers):.2f}%", icon="⚖️")
         
         st.rerun()
 
 
 def main():
-    """Função principal da página."""
+    """Função principal."""
     
     initialize_session_state()
     
-    # Header
     st.markdown('<p class="gradient-title">📊 Portfólios Eficientes</p>', unsafe_allow_html=True)
     
     st.markdown("""
-    Otimização de portfólios usando a **Teoria Moderna de Portfólio** (Markowitz). 
-    Encontre a melhor combinação de ativos para seu perfil de risco-retorno.
+    Otimização via **Teoria Moderna de Portfólio** (Markowitz).
     """)
     
-    # Verificar pré-requisitos
     if not check_prerequisites():
         st.stop()
     
-    # Informações
-    col1, col2 = st.columns([2, 1])
+    col1, col2 = st.columns([3, 1])
     
     with col1:
-        st.info(f"📊 **{len(st.session_state.selected_tickers)} ativos** prontos para otimização")
+        st.info(f"📊 {len(st.session_state.selected_tickers)} ativos prontos")
     
     with col2:
-        if st.button("🔙 Voltar", use_container_width=True):
-            st.switch_page("app/pages/02_Análise_de_Dividendos.py")
+        if st.button("🔙 Voltar", use_container_width=True, key="btn_back_page3"):
+            st.info("👈 Use o menu lateral")
     
     st.markdown("---")
     
-    # Calcular parâmetros
     calculate_portfolio_inputs()
     
     st.markdown("---")
     
-    # Tabs principais
+    # Tabs
     tab1, tab2, tab3, tab4 = st.tabs([
-        "📊 Estatísticas",
-        "🎯 Fronteira Eficiente",
-        "🎯 Portfólio Alvo",
-        "💼 Portfólios Salvos"
+        "📊 Stats",
+        "🎯 Fronteira",
+        "🎯 Alvo",
+        "💼 Salvos"
     ])
     
     with tab1:
         show_input_statistics()
         st.markdown("---")
-        show_equal_weight_baseline()
+        show_equal_weight()
     
     with tab2:
         compute_efficient_frontier()
@@ -836,28 +678,13 @@ def main():
     with tab4:
         show_saved_portfolios()
     
-    # Próximos passos
+    # Próximos
     st.markdown("---")
-    
-    ui.create_section_header(
-        "🚀 Próximos Passos",
-        "Continue para otimizações específicas",
-        "🚀"
-    )
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        if st.button("🎯 Sharpe e MinVol", use_container_width=True, type="primary"):
-            st.switch_page("app/pages/04_Sharpe_e_MinVol.py")
-    
-    with col2:
-        if st.button("📋 Resumo Executivo", use_container_width=True):
-            st.switch_page("app/pages/05_Resumo_Executivo.py")
-    
-    with col3:
-        if st.button("🔙 Voltar para Dividendos", use_container_width=True):
-            st.switch_page("app/pages/02_Análise_de_Dividendos.py")
+    st.info("""
+    **Continue:** Menu lateral (☰) →
+    - 🎯 Sharpe e MinVol
+    - 📋 Resumo Executivo
+    """)
 
 
 if __name__ == "__main__":
