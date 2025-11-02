@@ -43,12 +43,88 @@ def carregar_base_ativos():
 
 
 # ==========================================
+# FUNÇÕES DE PROCESSAMENTO DE DADOS
+# ==========================================
+
+def criar_ohlc_correto(df_precos, ticker):
+    """
+    Cria DataFrame OHLC correto a partir dos dados de preços históricos
+    Assume que df_precos contém dados diários completos
+    """
+    try:
+        # Se o DataFrame já tem colunas OHLC
+        if all(col in df_precos.columns for col in ['Open', 'High', 'Low', 'Close']):
+            df_ohlc = df_precos[['Open', 'High', 'Low', 'Close']].copy()
+            if 'Volume' in df_precos.columns:
+                df_ohlc['Volume'] = df_precos['Volume']
+            else:
+                df_ohlc['Volume'] = 0
+            return df_ohlc.dropna()
+        
+        # Se temos apenas uma coluna de preços (Close)
+        if ticker in df_precos.columns:
+            precos = df_precos[ticker].dropna()
+            
+            # Criar OHLC artificial baseado no Close
+            # Isso é uma aproximação quando não temos dados OHLC reais
+            df_ohlc = pd.DataFrame({
+                'Open': precos,
+                'High': precos * 1.005,  # Aproximação: High ~0.5% acima
+                'Low': precos * 0.995,   # Aproximação: Low ~0.5% abaixo
+                'Close': precos,
+                'Volume': 0
+            }, index=precos.index)
+            
+            return df_ohlc
+        
+        return pd.DataFrame()
+    
+    except Exception as e:
+        st.error(f"Erro ao criar OHLC para {ticker}: {str(e)}")
+        return pd.DataFrame()
+
+
+def obter_dados_historicos_completos(ticker, data_inicio, data_fim, max_tentativas=3):
+    """
+    Obtém dados históricos com múltiplas tentativas e validação
+    """
+    for tentativa in range(max_tentativas):
+        try:
+            # Adicionar margem de segurança nas datas
+            data_inicio_ajustada = data_inicio - timedelta(days=30)
+            
+            df = get_price_history([ticker], data_inicio_ajustada, data_fim)
+            
+            if df.empty:
+                continue
+            
+            # Criar OHLC correto
+            df_ohlc = criar_ohlc_correto(df, ticker)
+            
+            if len(df_ohlc) >= 50:  # Mínimo de 50 barras
+                # Filtrar para o período solicitado
+                df_ohlc = df_ohlc[df_ohlc.index >= data_inicio]
+                return df_ohlc
+            
+        except Exception as e:
+            if tentativa == max_tentativas - 1:
+                st.warning(f"Erro ao obter dados de {ticker}: {str(e)}")
+            continue
+    
+    return pd.DataFrame()
+
+
+# ==========================================
 # FUNÇÕES DE CÁLCULO DO INDICADOR
 # ==========================================
 
 def calcular_cacaus_channel(df, periodo_superior=20, periodo_inferior=30, ema_periodo=9):
     """Calcula o indicador Cacau's Channel"""
     df = df.copy()
+    
+    # Garantir que temos dados suficientes
+    if len(df) < max(periodo_superior, periodo_inferior, ema_periodo):
+        return df
     
     df['linha_superior'] = df['High'].rolling(window=periodo_superior).max()
     df['linha_inferior'] = df['Low'].rolling(window=periodo_inferior).min()
@@ -64,28 +140,27 @@ def calcular_cacaus_channel(df, periodo_superior=20, periodo_inferior=30, ema_pe
 
 def resample_para_semanal(df):
     """Converte dados diários para semanais"""
-    df_semanal = df.resample('W').agg({
-        'Open': 'first',
-        'High': 'max',
-        'Low': 'min',
-        'Close': 'last',
-        'Volume': 'sum'
-    }).dropna()
+    if df.empty or len(df) < 5:
+        return pd.DataFrame()
     
-    return df_semanal
+    try:
+        df_semanal = df.resample('W').agg({
+            'Open': 'first',
+            'High': 'max',
+            'Low': 'min',
+            'Close': 'last',
+            'Volume': 'sum'
+        }).dropna()
+        
+        return df_semanal
+    except Exception as e:
+        st.error(f"Erro ao criar timeframe semanal: {str(e)}")
+        return pd.DataFrame()
 
 
 def detectar_convergencia_com_cruzamento(df_diario, df_semanal, lookback=5):
     """
     Detecta convergência de CRUZAMENTOS entre timeframes
-    
-    Args:
-        df_diario: DataFrame com indicador no diário
-        df_semanal: DataFrame com indicador no semanal
-        lookback: Quantas barras olhar para trás para detectar cruzamento
-        
-    Returns:
-        Dict com resultado da convergência
     """
     
     if len(df_diario) < lookback + 1 or len(df_semanal) < lookback + 1:
@@ -104,10 +179,17 @@ def detectar_convergencia_com_cruzamento(df_diario, df_semanal, lookback=5):
     barra_cruz_diario = None
     
     for i in range(1, min(lookback + 1, len(df_diario))):
-        linha_media_atual = df_diario['linha_media'].iloc[-i]
-        ema_media_atual = df_diario['ema_media'].iloc[-i]
-        linha_media_anterior = df_diario['linha_media'].iloc[-(i+1)]
-        ema_media_anterior = df_diario['ema_media'].iloc[-(i+1)]
+        idx_atual = -i
+        idx_anterior = -(i+1)
+        
+        linha_media_atual = df_diario['linha_media'].iloc[idx_atual]
+        ema_media_atual = df_diario['ema_media'].iloc[idx_atual]
+        linha_media_anterior = df_diario['linha_media'].iloc[idx_anterior]
+        ema_media_anterior = df_diario['ema_media'].iloc[idx_anterior]
+        
+        # Verificar se os valores são válidos
+        if pd.isna(linha_media_atual) or pd.isna(ema_media_atual):
+            continue
         
         # Cruzamento para CIMA (COMPRA)
         if linha_media_anterior <= ema_media_anterior and linha_media_atual > ema_media_atual:
@@ -126,10 +208,17 @@ def detectar_convergencia_com_cruzamento(df_diario, df_semanal, lookback=5):
     barra_cruz_semanal = None
     
     for i in range(1, min(lookback + 1, len(df_semanal))):
-        linha_media_atual = df_semanal['linha_media'].iloc[-i]
-        ema_media_atual = df_semanal['ema_media'].iloc[-i]
-        linha_media_anterior = df_semanal['linha_media'].iloc[-(i+1)]
-        ema_media_anterior = df_semanal['ema_media'].iloc[-(i+1)]
+        idx_atual = -i
+        idx_anterior = -(i+1)
+        
+        linha_media_atual = df_semanal['linha_media'].iloc[idx_atual]
+        ema_media_atual = df_semanal['ema_media'].iloc[idx_atual]
+        linha_media_anterior = df_semanal['linha_media'].iloc[idx_anterior]
+        ema_media_anterior = df_semanal['ema_media'].iloc[idx_anterior]
+        
+        # Verificar se os valores são válidos
+        if pd.isna(linha_media_atual) or pd.isna(ema_media_atual):
+            continue
         
         # Cruzamento para CIMA (COMPRA)
         if linha_media_anterior <= ema_media_anterior and linha_media_atual > ema_media_atual:
@@ -195,79 +284,27 @@ def calcular_entrada_stop_alvo(df, direcao, rr_ratio=2.0):
     }
 
 
-def obter_dados_ohlc_completos(ticker, data_inicio, data_fim):
-    """
-    Obtém dados OHLC completos do ativo usando yfinance diretamente
-    para garantir velas completas no gráfico
-    """
-    try:
-        import yfinance as yf
-        
-        # Adicionar .SA para ativos brasileiros se necessário
-        ticker_yf = ticker if '.SA' in ticker else f"{ticker}.SA"
-        
-        # Baixar dados com yfinance
-        dados = yf.download(
-            ticker_yf,
-            start=data_inicio,
-            end=data_fim,
-            progress=False,
-            auto_adjust=False  # Manter dados originais sem ajuste
-        )
-        
-        if dados.empty:
-            return None
-        
-        # Renomear colunas para padrão
-        df_ohlc = pd.DataFrame({
-            'Open': dados['Open'],
-            'High': dados['High'],
-            'Low': dados['Low'],
-            'Close': dados['Close'],
-            'Volume': dados['Volume']
-        }).dropna()
-        
-        return df_ohlc
-        
-    except Exception as e:
-        # Fallback: usar get_price_history e criar OHLC aproximado
-        try:
-            df = get_price_history([ticker], data_inicio, data_fim)
-            
-            if df.empty or ticker not in df.columns:
-                return None
-            
-            # Criar OHLC aproximado
-            df_ohlc = pd.DataFrame({
-                'Open': df[ticker],
-                'High': df[ticker] * 1.001,  # Aproximação: +0.1%
-                'Low': df[ticker] * 0.999,   # Aproximação: -0.1%
-                'Close': df[ticker],
-                'Volume': 0
-            }).dropna()
-            
-            return df_ohlc
-            
-        except:
-            return None
-
-
 # ==========================================
 # VISUALIZAÇÃO
 # ==========================================
 
 def criar_grafico_cacaus_channel(df_diario, df_semanal, ticker, timeframe_ativo="Diário"):
-    """Cria gráfico do Cacau's Channel com candlesticks completos e melhor centralização"""
+    """Cria gráfico do Cacau's Channel com candlesticks completos e bem centralizado"""
     
     df = df_diario if timeframe_ativo == "Diário" else df_semanal
     
-    # Mostrar últimas barras
+    # Determinar número de barras a mostrar
     num_barras = 100 if timeframe_ativo == "Diário" else 50
-    df = df.tail(num_barras)
+    df = df.tail(num_barras).copy()
+    
+    # Verificar se temos dados suficientes
+    if df.empty or len(df) < 10:
+        st.warning(f"Dados insuficientes para gerar gráfico de {ticker}")
+        return None
     
     fig = go.Figure()
     
-    # Candlestick com OHLC completo
+    # Candlestick com OHLC correto
     fig.add_trace(go.Candlestick(
         x=df.index,
         open=df['Open'],
@@ -279,7 +316,9 @@ def criar_grafico_cacaus_channel(df_diario, df_semanal, ticker, timeframe_ativo=
         decreasing_line_color='#ef5350',
         increasing_fillcolor='#26a69a',
         decreasing_fillcolor='#ef5350',
-        showlegend=True
+        whiskerwidth=0.5,
+        increasing_line_width=1.5,
+        decreasing_line_width=1.5
     ))
     
     # Linha Superior (vermelha)
@@ -288,8 +327,8 @@ def criar_grafico_cacaus_channel(df_diario, df_semanal, ticker, timeframe_ativo=
         y=df['linha_superior'],
         mode='lines',
         name='Linha Superior',
-        line=dict(color='red', width=2),
-        showlegend=True
+        line=dict(color='#ff4444', width=2),
+        hovertemplate='Superior: R$ %{y:.2f}<extra></extra>'
     ))
     
     # Linha Inferior (verde)
@@ -298,8 +337,8 @@ def criar_grafico_cacaus_channel(df_diario, df_semanal, ticker, timeframe_ativo=
         y=df['linha_inferior'],
         mode='lines',
         name='Linha Inferior',
-        line=dict(color='lime', width=2),
-        showlegend=True
+        line=dict(color='#00ff00', width=2),
+        hovertemplate='Inferior: R$ %{y:.2f}<extra></extra>'
     ))
     
     # Linha Média (branca)
@@ -308,8 +347,8 @@ def criar_grafico_cacaus_channel(df_diario, df_semanal, ticker, timeframe_ativo=
         y=df['linha_media'],
         mode='lines',
         name='Linha Média',
-        line=dict(color='white', width=2),
-        showlegend=True
+        line=dict(color='white', width=2.5),
+        hovertemplate='Média: R$ %{y:.2f}<extra></extra>'
     ))
     
     # EMA da Média (laranja)
@@ -318,18 +357,21 @@ def criar_grafico_cacaus_channel(df_diario, df_semanal, ticker, timeframe_ativo=
         y=df['ema_media'],
         mode='lines',
         name='EMA Média',
-        line=dict(color='orange', width=2, dash='dash'),
-        showlegend=True
+        line=dict(color='#ff9800', width=2.5, dash='dash'),
+        hovertemplate='EMA: R$ %{y:.2f}<extra></extra>'
     ))
     
-    # Configuração do layout com melhor centralização
+    # Calcular range de preços para melhor centralização
+    preco_min = df[['Low', 'linha_inferior']].min().min()
+    preco_max = df[['High', 'linha_superior']].max().max()
+    margem = (preco_max - preco_min) * 0.1  # 10% de margem
+    
     fig.update_layout(
         title={
             'text': f"{ticker} - Cacau's Channel ({timeframe_ativo})",
             'x': 0.5,
             'xanchor': 'center',
-            'yanchor': 'top',
-            'font': {'size': 20}
+            'font': {'size': 20, 'color': 'white'}
         },
         xaxis_title="Data",
         yaxis_title="Preço (R$)",
@@ -337,8 +379,24 @@ def criar_grafico_cacaus_channel(df_diario, df_semanal, ticker, timeframe_ativo=
         template="plotly_dark",
         hovermode='x unified',
         xaxis_rangeslider_visible=False,
-        # Melhor centralização e espaçamento
+        
+        # Melhorar centralização e margens
         margin=dict(l=80, r=80, t=100, b=80),
+        
+        # Configurar eixo Y para melhor visualização
+        yaxis=dict(
+            range=[preco_min - margem, preco_max + margem],
+            autorange=False,
+            fixedrange=False
+        ),
+        
+        # Configurar eixo X
+        xaxis=dict(
+            rangeslider=dict(visible=False),
+            type='date'
+        ),
+        
+        # Legenda
         legend=dict(
             orientation="h",
             yanchor="bottom",
@@ -347,22 +405,15 @@ def criar_grafico_cacaus_channel(df_diario, df_semanal, ticker, timeframe_ativo=
             x=0.5,
             font=dict(size=12)
         ),
-        # Ajustar eixo Y para melhor visualização
-        yaxis=dict(
-            autorange=True,
-            fixedrange=False
-        ),
-        # Ajustar eixo X
-        xaxis=dict(
-            autorange=True,
-            rangeslider=dict(visible=False),
-            type='date'
-        )
+        
+        # Cor de fundo
+        plot_bgcolor='#0e1117',
+        paper_bgcolor='#0e1117'
     )
     
-    # Configurar hover
-    fig.update_xaxes(showgrid=True, gridwidth=0.5, gridcolor='rgba(128, 128, 128, 0.2)')
-    fig.update_yaxes(showgrid=True, gridwidth=0.5, gridcolor='rgba(128, 128, 128, 0.2)')
+    # Adicionar grid para melhor visualização
+    fig.update_xaxes(showgrid=True, gridwidth=0.5, gridcolor='#333333')
+    fig.update_yaxes(showgrid=True, gridwidth=0.5, gridcolor='#333333')
     
     return fig
 
@@ -403,7 +454,6 @@ with st.sidebar:
     
     data_fim = st.date_input("Data Final", value=datetime.now(), max_value=datetime.now())
     
-    # Período expandido para até 5 anos
     periodo_analise = st.selectbox(
         "Período de Análise",
         options=["3 meses", "6 meses", "1 ano", "2 anos", "3 anos", "5 anos"],
@@ -419,10 +469,11 @@ with st.sidebar:
         "5 anos": 1825
     }
     
-    data_inicio = datetime.combine(data_fim, datetime.min.time()) - timedelta(days=periodos_dias[periodo_analise])
+    dias_periodo = periodos_dias[periodo_analise]
+    data_inicio = datetime.combine(data_fim, datetime.min.time()) - timedelta(days=dias_periodo)
     data_fim_dt = datetime.combine(data_fim, datetime.min.time())
     
-    st.caption(f"📅 De {data_inicio.strftime('%d/%m/%Y')} até {data_fim_dt.strftime('%d/%m/%Y')}")
+    st.info(f"📊 Analisando de {data_inicio.strftime('%d/%m/%Y')} até {data_fim.strftime('%d/%m/%Y')}")
 
 
 # ==========================================
@@ -444,7 +495,7 @@ with col_esquerda:
     base_completa = carregar_base_ativos()
     
     if base_completa:
-        st.caption(f"✅ {len(base_completa)} ativos")
+        st.caption(f"✅ {len(base_completa)} ativos disponíveis")
     
     # Opções de seleção
     opcao_selecao = st.radio(
@@ -462,33 +513,34 @@ with col_esquerda:
             portfolios_disponiveis = listar_portfolios()
             
             if portfolios_disponiveis:
-                portfolio_selecionado = st.selectbox("", portfolios_disponiveis, label_visibility="collapsed")
+                portfolio_selecionado = st.selectbox("Selecione o portfólio", portfolios_disponiveis, label_visibility="collapsed")
                 portfolio = carregar_portfolio(portfolio_selecionado)
                 tickers = portfolio.tickers if portfolio else []
-                st.caption(f"📊 {len(tickers)} ativos")
+                st.caption(f"📊 {len(tickers)} ativos no portfólio")
             else:
-                st.warning("Sem portfólios")
-        except:
-            st.error("Erro ao carregar")
+                st.warning("Nenhum portfólio encontrado")
+        except Exception as e:
+            st.error(f"Erro ao carregar portfólios: {str(e)}")
     
     # OPÇÃO 2: Base B3
     elif opcao_selecao == "🌐 Base B3":
         if base_completa:
             
             filtro_tipo = st.multiselect(
-                "Tipo",
+                "Tipo de Ativo",
                 options=["Ações", "FIIs", "ETFs", "Todos"],
                 default=["Ações"],
                 label_visibility="collapsed"
             )
             
             limite_ativos = st.number_input(
-                "Limite",
-                min_value=0,
-                max_value=len(base_completa),
+                "Limite de Ativos",
+                min_value=10,
+                max_value=min(500, len(base_completa)),
                 value=50,
                 step=10,
-                label_visibility="collapsed"
+                label_visibility="collapsed",
+                help="Número máximo de ativos para analisar"
             )
             
             if "Todos" in filtro_tipo:
@@ -510,12 +562,12 @@ with col_esquerda:
             if limite_ativos > 0 and len(tickers) > limite_ativos:
                 tickers = tickers[:limite_ativos]
             
-            st.caption(f"📊 {len(tickers)} ativos")
+            st.caption(f"📊 {len(tickers)} ativos selecionados")
     
     # OPÇÃO 3: Manual
     elif opcao_selecao == "✍️ Manual":
         tickers_input = st.text_area(
-            "Ativos",
+            "Digite os tickers (um por linha ou separados por vírgula)",
             value="PETR4\nVALE3\nITUB4",
             height=100,
             label_visibility="collapsed"
@@ -524,93 +576,112 @@ with col_esquerda:
         tickers_raw = tickers_input.replace(',', '\n').split('\n')
         tickers = [t.strip().upper() for t in tickers_raw if t.strip()]
         
-        st.caption(f"📊 {len(tickers)} ativos")
+        st.caption(f"📊 {len(tickers)} ativos listados")
     
     # Botão de screener
     st.markdown("---")
     
-    if st.button("🔍 Screener", type="primary", use_container_width=True):
+    if st.button("🔍 Executar Screener", type="primary", use_container_width=True):
         
-        oportunidades = []
-        todos_dados = {}
-        
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        total_analisados = 0
-        total_com_dados = 0
-        total_convergentes = 0
-        
-        for idx, ticker in enumerate(tickers):
-            
-            progress = (idx + 1) / len(tickers)
-            progress_bar.progress(progress)
-            status_text.text(f"{idx+1}/{len(tickers)}")
-            
-            total_analisados += 1
-            
-            try:
-                # Obter dados OHLC completos
-                df_ativo = obter_dados_ohlc_completos(ticker, data_inicio, data_fim_dt)
-                
-                if df_ativo is None or len(df_ativo) < max(periodo_superior, periodo_inferior, ema_periodo) + 10:
-                    continue
-                
-                total_com_dados += 1
-                
-                df_diario = calcular_cacaus_channel(df_ativo, periodo_superior, periodo_inferior, ema_periodo)
-                df_semanal_raw = resample_para_semanal(df_ativo)
-                
-                if len(df_semanal_raw) < max(periodo_superior, periodo_inferior, ema_periodo) + 2:
-                    continue
-                
-                df_semanal = calcular_cacaus_channel(df_semanal_raw, periodo_superior, periodo_inferior, ema_periodo)
-                
-                convergencia = detectar_convergencia_com_cruzamento(df_diario, df_semanal, lookback_cruzamento)
-                
-                # Salvar TODOS os dados
-                todos_dados[ticker] = {
-                    'df_diario': df_diario,
-                    'df_semanal': df_semanal,
-                    'convergencia': convergencia
-                }
-                
-                # Adicionar apenas convergentes
-                if convergencia['convergente']:
-                    total_convergentes += 1
-                    pontos = calcular_entrada_stop_alvo(df_diario, convergencia['direcao'], rr_ratio)
-                    
-                    oportunidades.append({
-                        'ticker': ticker,
-                        'direcao': convergencia['direcao'],
-                        'entrada': pontos['entrada'],
-                        'stop': pontos['stop'],
-                        'alvo': pontos['alvo'],
-                        'rr': pontos['rr'],
-                        'tipo_sinal': convergencia['tipo_sinal']
-                    })
-            
-            except Exception as e:
-                continue
-        
-        progress_bar.empty()
-        status_text.empty()
-        
-        st.session_state.cacaus_oportunidades = oportunidades
-        st.session_state.cacaus_todos_dados = todos_dados
-        
-        st.metric("Analisados", total_analisados)
-        st.metric("Com Dados", total_com_dados)
-        st.metric("🎯 Sinais", total_convergentes)
-        
-        if oportunidades:
-            st.success(f"✅ {len(oportunidades)} sinal(is)!")
+        if not tickers:
+            st.error("❌ Nenhum ativo selecionado")
         else:
-            st.info("Nenhum sinal")
+            oportunidades = []
+            todos_dados = {}
+            
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            total_analisados = 0
+            total_com_dados = 0
+            total_convergentes = 0
+            erros = []
+            
+            for idx, ticker in enumerate(tickers):
+                
+                progress = (idx + 1) / len(tickers)
+                progress_bar.progress(progress)
+                status_text.text(f"Analisando {ticker}... ({idx+1}/{len(tickers)})")
+                
+                total_analisados += 1
+                
+                try:
+                    # Obter dados históricos completos
+                    df_ativo = obter_dados_historicos_completos(ticker, data_inicio, data_fim_dt)
+                    
+                    if df_ativo.empty or len(df_ativo) < max(periodo_superior, periodo_inferior, ema_periodo) + 10:
+                        erros.append(f"{ticker}: Dados insuficientes")
+                        continue
+                    
+                    total_com_dados += 1
+                    
+                    # Calcular indicador no diário
+                    df_diario = calcular_cacaus_channel(df_ativo, periodo_superior, periodo_inferior, ema_periodo)
+                    
+                    # Criar timeframe semanal
+                    df_semanal_raw = resample_para_semanal(df_ativo)
+                    
+                    if df_semanal_raw.empty or len(df_semanal_raw) < max(periodo_superior, periodo_inferior, ema_periodo) + 2:
+                        erros.append(f"{ticker}: Erro ao criar semanal")
+                        continue
+                    
+                    # Calcular indicador no semanal
+                    df_semanal = calcular_cacaus_channel(df_semanal_raw, periodo_superior, periodo_inferior, ema_periodo)
+                    
+                    # Detectar convergência
+                    convergencia = detectar_convergencia_com_cruzamento(df_diario, df_semanal, lookback_cruzamento)
+                    
+                    # Salvar TODOS os dados para visualização posterior
+                    todos_dados[ticker] = {
+                        'df_diario': df_diario,
+                        'df_semanal': df_semanal,
+                        'convergencia': convergencia
+                    }
+                    
+                    # Adicionar apenas convergentes à lista de oportunidades
+                    if convergencia['convergente']:
+                        total_convergentes += 1
+                        pontos = calcular_entrada_stop_alvo(df_diario, convergencia['direcao'], rr_ratio)
+                        
+                        oportunidades.append({
+                            'ticker': ticker,
+                            'direcao': convergencia['direcao'],
+                            'entrada': pontos['entrada'],
+                            'stop': pontos['stop'],
+                            'alvo': pontos['alvo'],
+                            'rr': pontos['rr'],
+                            'tipo_sinal': convergencia['tipo_sinal']
+                        })
+                
+                except Exception as e:
+                    erros.append(f"{ticker}: {str(e)}")
+                    continue
+            
+            progress_bar.empty()
+            status_text.empty()
+            
+            # Salvar resultados no session_state
+            st.session_state.cacaus_oportunidades = oportunidades
+            st.session_state.cacaus_todos_dados = todos_dados
+            
+            # Mostrar estatísticas
+            st.metric("Analisados", total_analisados)
+            st.metric("Com Dados", total_com_dados)
+            st.metric("🎯 Sinais", total_convergentes)
+            
+            if oportunidades:
+                st.success(f"✅ {len(oportunidades)} sinal(is) encontrado(s)!")
+            else:
+                st.info("ℹ️ Nenhum sinal convergente encontrado")
+            
+            if erros and len(erros) <= 10:
+                with st.expander(f"⚠️ {len(erros)} erro(s)"):
+                    for erro in erros:
+                        st.caption(erro)
     
-    # Mostrar screener
+    # Mostrar lista de oportunidades
     st.markdown("---")
-    st.subheader("🎯 Sinais")
+    st.subheader("🎯 Sinais Convergentes")
     
     if 'cacaus_oportunidades' in st.session_state and st.session_state.cacaus_oportunidades:
         
@@ -620,15 +691,15 @@ with col_esquerda:
             direcao_cor = "🟢" if opp['direcao'] == 'COMPRA' else "🔴"
             
             if st.button(
-                f"{direcao_cor} {opp['ticker']}",
+                f"{direcao_cor} {opp['ticker']} - {opp['tipo_sinal']}",
                 key=f"btn_{opp['ticker']}",
                 use_container_width=True,
-                help=f"{opp['tipo_sinal']}"
+                help=f"Entrada: R$ {opp['entrada']:.2f} | Stop: R$ {opp['stop']:.2f} | Alvo: R$ {opp['alvo']:.2f}"
             ):
                 st.session_state.ativo_visualizar = opp['ticker']
                 st.rerun()
     else:
-        st.caption("Execute o screener")
+        st.caption("Execute o screener para ver sinais")
 
 
 # ==========================================
@@ -651,14 +722,14 @@ with col_direita:
             ativo_padrao = ativos_disponiveis[0]
         
         ativo_selecionado = st.selectbox(
-            "Ativo",
+            "Selecione o Ativo",
             options=ativos_disponiveis,
             index=ativos_disponiveis.index(ativo_padrao) if ativo_padrao in ativos_disponiveis else 0
         )
         
         dados_ativo = st.session_state.cacaus_todos_dados[ativo_selecionado]
         
-        # Verificar se tem sinal
+        # Verificar se tem sinal convergente
         opp_selecionada = None
         if 'cacaus_oportunidades' in st.session_state:
             opp_selecionada = next(
@@ -666,10 +737,10 @@ with col_direita:
                 None
             )
         
-        # Mostrar informações
+        # Mostrar informações do sinal
         if opp_selecionada:
-            # TEM SINAL
-            st.success(f"🎯 SINAL: {opp_selecionada['direcao']}")
+            # TEM SINAL CONVERGENTE
+            st.success(f"🎯 SINAL CONVERGENTE: {opp_selecionada['direcao']}")
             
             col1, col2, col3, col4, col5 = st.columns(5)
             
@@ -690,7 +761,7 @@ with col_direita:
                 st.metric("Tipo", opp_selecionada['tipo_sinal'])
         
         else:
-            # SEM SINAL
+            # SEM SINAL CONVERGENTE - Mostrar status dos cruzamentos
             conv = dados_ativo['convergencia']
             
             col1, col2, col3 = st.columns(3)
@@ -698,16 +769,18 @@ with col_direita:
             with col1:
                 if conv['cruzamento_diario']:
                     cor = "🟢" if conv['cruzamento_diario'] == 'COMPRA' else "🔴"
-                    st.info(f"📅 Diário: {cor} {conv['cruzamento_diario']}")
+                    barras = f"({conv['barra_cruzamento_diario']} barra(s))"
+                    st.info(f"📅 Diário: {cor} {conv['cruzamento_diario']} {barras}")
                 else:
-                    st.warning("📅 Diário: Sem cruz.")
+                    st.warning("📅 Diário: Sem cruzamento")
             
             with col2:
                 if conv['cruzamento_semanal']:
                     cor = "🟢" if conv['cruzamento_semanal'] == 'COMPRA' else "🔴"
-                    st.info(f"📆 Semanal: {cor} {conv['cruzamento_semanal']}")
+                    barras = f"({conv['barra_cruzamento_semanal']} barra(s))"
+                    st.info(f"📆 Semanal: {cor} {conv['cruzamento_semanal']} {barras}")
                 else:
-                    st.warning("📆 Semanal: Sem cruz.")
+                    st.warning("📆 Semanal: Sem cruzamento")
             
             with col3:
                 if conv['convergente']:
@@ -715,14 +788,14 @@ with col_direita:
                 else:
                     st.error("❌ Sem convergência")
         
-        # Timeframe
+        # Seletor de timeframe
         timeframe = st.radio(
-            "Timeframe",
+            "Timeframe para Visualização",
             options=["Diário", "Semanal"],
             horizontal=True
         )
         
-        # Gráfico com velas completas
+        # Criar e mostrar gráfico
         fig = criar_grafico_cacaus_channel(
             dados_ativo['df_diario'],
             dados_ativo['df_semanal'],
@@ -730,51 +803,57 @@ with col_direita:
             timeframe
         )
         
-        st.plotly_chart(fig, use_container_width=True)
+        if fig:
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.error("❌ Erro ao gerar gráfico")
     
     else:
-        st.info("👈 Execute o screener para visualizar")
+        st.info("👈 Execute o screener na barra lateral para visualizar gráficos")
         
         # Permitir visualizar ativo individual sem screener
         st.markdown("---")
         st.subheader("🔍 Análise Individual")
         
-        ticker_individual = st.text_input("Ticker", value="PETR4")
+        ticker_individual = st.text_input("Digite o ticker do ativo", value="PETR4")
         
-        if st.button("📊 Visualizar", use_container_width=True):
+        if st.button("📊 Visualizar Ativo", use_container_width=True):
             
-            with st.spinner(f"Carregando {ticker_individual}..."):
+            with st.spinner(f"Carregando dados de {ticker_individual}..."):
                 
                 try:
-                    # Obter dados OHLC completos
-                    df_ativo = obter_dados_ohlc_completos(ticker_individual, data_inicio, data_fim_dt)
+                    df_ativo = obter_dados_historicos_completos(ticker_individual, data_inicio, data_fim_dt)
                     
-                    if df_ativo is not None and len(df_ativo) >= max(periodo_superior, periodo_inferior, ema_periodo) + 10:
+                    if not df_ativo.empty and len(df_ativo) >= max(periodo_superior, periodo_inferior, ema_periodo) + 10:
                         
                         df_diario = calcular_cacaus_channel(df_ativo, periodo_superior, periodo_inferior, ema_periodo)
                         df_semanal_raw = resample_para_semanal(df_ativo)
-                        df_semanal = calcular_cacaus_channel(df_semanal_raw, periodo_superior, periodo_inferior, ema_periodo)
                         
-                        convergencia = detectar_convergencia_com_cruzamento(df_diario, df_semanal, lookback_cruzamento)
-                        
-                        st.session_state.cacaus_todos_dados = {
-                            ticker_individual: {
-                                'df_diario': df_diario,
-                                'df_semanal': df_semanal,
-                                'convergencia': convergencia
+                        if not df_semanal_raw.empty:
+                            df_semanal = calcular_cacaus_channel(df_semanal_raw, periodo_superior, periodo_inferior, ema_periodo)
+                            
+                            convergencia = detectar_convergencia_com_cruzamento(df_diario, df_semanal, lookback_cruzamento)
+                            
+                            st.session_state.cacaus_todos_dados = {
+                                ticker_individual: {
+                                    'df_diario': df_diario,
+                                    'df_semanal': df_semanal,
+                                    'convergencia': convergencia
+                                }
                             }
-                        }
-                        
-                        st.session_state.ativo_visualizar = ticker_individual
-                        
-                        st.success("✅ Carregado!")
-                        st.rerun()
+                            
+                            st.session_state.ativo_visualizar = ticker_individual
+                            
+                            st.success(f"✅ Dados de {ticker_individual} carregados com sucesso!")
+                            st.rerun()
+                        else:
+                            st.error("❌ Erro ao criar timeframe semanal")
                     
                     else:
-                        st.error("❌ Sem dados suficientes")
+                        st.error(f"❌ Dados insuficientes para {ticker_individual}")
                 
                 except Exception as e:
-                    st.error(f"❌ Erro: {str(e)}")
+                    st.error(f"❌ Erro ao carregar {ticker_individual}: {str(e)}")
 
 
 # ==========================================
@@ -783,6 +862,91 @@ with col_direita:
 
 st.markdown("---")
 
-with st.expander("📖 Como funciona?"):
+with st.expander("📖 Como funciona o Cacau's Channel?"):
     st.markdown("""
-    ### Lógica de Sin<span class="cursor">█</span>
+    ### Estrutura do Indicador
+    
+    O **Cacau's Channel** é composto por quatro elementos principais que trabalham em conjunto para identificar oportunidades de trading:
+    
+    **Componentes Visuais:**
+    
+    A **Linha Superior (Vermelha)** representa a máxima dos últimos períodos configurados, funcionando como resistência dinâmica e indicando zonas de potencial reversão ou rompimento. Quando o preço se aproxima desta linha, sinaliza possível topo de movimento.
+    
+    A **Linha Inferior (Verde)** mostra a mínima dos últimos períodos, atuando como suporte dinâmico. Proximidade a esta linha sugere possível fundo de movimento ou zona de compra.
+    
+    A **Linha Média (Branca)** é calculada como ponto médio entre as linhas superior e inferior, representando o equilíbrio do canal. Sua posição relativa à EMA determina a tendência atual do ativo.
+    
+    A **EMA da Média (Laranja Tracejada)** suaviza os movimentos da linha média através de média móvel exponencial, fornecendo referência mais estável para identificação de tendências.
+    
+    ### Lógica de Sinais (Cruzamentos)
+    
+    O sistema detecta cruzamentos entre a Linha Média (branca) e a EMA (laranja) em dois timeframes diferentes para confirmar sinais.
+    
+    **Sinal de COMPRA ocorre quando:**
+    - ✅ No timeframe **Semanal**, a Linha Branca cruza para CIMA da Linha Laranja
+    - ✅ No timeframe **Diário**, a Linha Branca cruza para CIMA da Linha Laranja
+    - ✅ Há **convergência**: ambos os cruzamentos apontam na mesma direção
+    
+    **Sinal de VENDA ocorre quando:**
+    - ✅ No timeframe **Semanal**, a Linha Branca cruza para BAIXO da Linha Laranja
+    - ✅ No timeframe **Diário**, a Linha Branca cruza para BAIXO da Linha Laranja
+    - ✅ Há **convergência**: ambos os cruzamentos apontam na mesma direção
+    
+    ### Tipos de Sinal
+    
+    O sistema classifica os sinais de acordo com o timing dos cruzamentos:
+    
+    **SIMULTÂNEO** indica que ambos os timeframes (diário e semanal) apresentaram cruzamento na última barra, representando o sinal mais forte e recente.
+    
+    **REENTRADA DIÁRIO** ocorre quando o timeframe semanal já estava posicionado e o diário acabou de cruzar, oferecendo oportunidade de entrada em tendência já estabelecida no prazo maior.
+    
+    **REENTRADA SEMANAL** acontece quando o diário já estava posicionado e o semanal acabou de cruzar, confirmando a tendência de curto prazo com movimento de longo prazo.
+    
+    **RECENTE** identifica situações onde ambos os cruzamentos ocorreram há poucas barras (dentro do lookback configurado), mas não simultaneamente.
+    
+    ### Gestão de Risco
+    
+    O sistema calcula automaticamente pontos de entrada, stop loss e alvo baseados na estrutura do canal:
+    
+    Para operações de **COMPRA**, o stop loss é posicionado na Linha Inferior (verde), protegendo contra rompimento do suporte. O alvo é calculado projetando a distância entre entrada e stop multiplicada pelo Risk/Reward configurado acima da entrada.
+    
+    Para operações de **VENDA**, o stop loss é posicionado na Linha Superior (vermelha), protegendo contra rompimento da resistência. O alvo é calculado projetando a distância entre stop e entrada multiplicada pelo Risk/Reward configurado abaixo da entrada.
+    
+    ### Parâmetros Configuráveis
+    
+    **Período Superior** controla a janela de cálculo da linha superior (resistência). Valores maiores criam canal mais amplo e estável.
+    
+    **Período Inferior** define a janela de cálculo da linha inferior (suporte). Pode ser diferente do superior para assimetria intencional.
+    
+    **EMA Período** determina a suavização da linha média. Valores menores tornam o indicador mais responsivo, valores maiores reduzem ruído.
+    
+    **Risk/Reward** estabelece a proporção entre risco assumido (distância até stop) e ganho esperado (distância até alvo).
+    
+    **Lookback Cruzamento** define quantas barras olhar para trás ao detectar cruzamentos, permitindo capturar sinais recentes mas não apenas da última barra.
+    
+    ### Interpretação dos Gráficos
+    
+    No timeframe **Diário**, você visualiza movimentos de curto prazo com maior granularidade, ideal para timing preciso de entrada e acompanhamento intraday da operação.
+    
+    No timeframe **Semanal**, você observa a tendência de médio prazo, essencial para confirmar a direção principal do movimento e evitar operações contra a tendência maior.
+    
+    A convergência entre ambos os timeframes aumenta significativamente a probabilidade de sucesso, pois indica alinhamento entre diferentes perspectivas temporais do mercado.
+    
+    ### Limitações e Avisos
+    
+    ⚠️ **Este é um sistema de análise técnica e não garante lucros**. Mercados financeiros envolvem risco de perda de capital.
+    
+    ⚠️ **Sinais falsos podem ocorrer**, especialmente em mercados laterais ou de baixa volatilidade. Use sempre stop loss.
+    
+    ⚠️ **A qualidade dos dados históricos impacta os resultados**. Períodos muito longos podem ter gaps ou inconsistências.
+    
+    ⚠️ **Não é recomendação de investimento**. Esta ferramenta serve apenas para análise técnica educacional. Consulte profissionais certificados antes de investir.
+    
+    ### Dicas de Uso
+    
+    Para melhores resultados, combine o Cacau's Channel com análise fundamentalista, considere o contexto macroeconômico e notícias do setor, e sempre opere com gestão de risco adequada ao seu perfil.
+    
+    Teste diferentes combinações de parâmetros em períodos históricos para entender o comportamento do indicador antes de usar em operações reais.
+    
+    Priorize sinais do tipo SIMULTÂNEO em ativos com boa liquidez e volume consistente.
+    """)
