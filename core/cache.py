@@ -263,30 +263,39 @@ class CacheManager:
             'newest': datetime.now()
         }
     
-    def exibir_painel_controle(self):
-        """Exibe painel de controle do cache no Streamlit"""
-        st.sidebar.markdown("---")
-        st.sidebar.subheader("⚡ Cache")
+def exibir_painel_controle(self):
+    """Exibe painel de controle do cache no Streamlit"""
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("⚡ Cache")
+    
+    info = self.obter_info()
+    stats = info['stats']
+    
+    # Estatísticas
+    col1, col2 = st.sidebar.columns(2)
+    with col1:
+        st.metric("Hits", stats['hits'])
+    with col2:
+        st.metric("Misses", stats['misses'])
+    
+    st.sidebar.metric("Taxa de Acerto", f"{stats['hit_rate']:.1f}%")
+    st.sidebar.metric("Requisições", stats['data_requests'])
+    
+    # Botões de controle
+    if st.sidebar.button("🗑️ Limpar Cache", use_container_width=True, key="limpar_cache_btn"):
+        # Limpar cache do Streamlit
+        st.cache_data.clear()
+        st.cache_resource.clear()
         
-        info = self.obter_info()
-        stats = info['stats']
+        # Resetar estatísticas
+        self.stats.resetar()
         
-        # Estatísticas
-        col1, col2 = st.sidebar.columns(2)
-        with col1:
-            st.metric("Hits", stats['hits'])
-        with col2:
-            st.metric("Misses", stats['misses'])
+        # Mensagem de sucesso
+        st.sidebar.success("✅ Cache limpo!")
         
-        st.sidebar.metric("Taxa de Acerto", f"{stats['hit_rate']:.1f}%")
-        st.sidebar.metric("Requisições", stats['data_requests'])
-        
-        # Botões de controle
-        if st.sidebar.button("🗑️ Limpar Cache", use_container_width=True):
-            limpar_cache_completo()
-            self.stats.resetar()
-            st.sidebar.success("Cache limpo!")
-            st.rerun()
+        # Forçar recarregamento
+        st.rerun()
+
 
 
 # ==========================================
