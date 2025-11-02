@@ -4,21 +4,6 @@ Permite criar, editar, salvar e comparar múltiplos portfólios
 """
 
 import streamlit as st
-
-# ==========================================
-# CONFIGURAÇÃO DA PÁGINA (DEVE SER PRIMEIRO)
-# ==========================================
-
-st.set_page_config(
-    page_title="Gestão de Portfólios",
-    page_icon="📁",
-    layout="wide"
-)
-
-# ==========================================
-# IMPORTS
-# ==========================================
-
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
@@ -87,22 +72,17 @@ def calcular_metricas_portfolio(df_precos, pesos):
 
 
 # ==========================================
-# PAINEL DE CACHE
+# TÍTULO E PAINEL DE CACHE
 # ==========================================
+
+st.title("📁 Gestão de Portfólios")
+st.markdown("Crie, salve e compare múltiplos portfólios de investimentos")
 
 # Painel de cache na sidebar
 try:
     cache_manager.exibir_painel_controle()
 except:
     pass
-
-
-# ==========================================
-# TÍTULO
-# ==========================================
-
-st.title("📁 Gestão de Portfólios")
-st.markdown("Crie, salve e compare múltiplos portfólios de investimentos")
 
 st.markdown("---")
 
@@ -130,20 +110,17 @@ with tab1:
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        # Nome do portfólio
         nome_portfolio = st.text_input(
             "Nome do Portfólio *",
             placeholder="Ex: Conservador, Agressivo, Dividendos..."
         )
         
-        # Descrição
         descricao = st.text_area(
             "Descrição (opcional)",
             placeholder="Descreva a estratégia deste portfólio..."
         )
     
     with col2:
-        # Período de análise
         st.markdown("**Período de Análise**")
         
         data_fim = st.date_input(
@@ -159,11 +136,8 @@ with tab1:
         )
     
     st.markdown("---")
-    
-    # Configuração de ativos
     st.markdown("### 🎯 Configuração de Ativos")
     
-    # Número de ativos
     num_ativos = st.number_input(
         "Quantos ativos?",
         min_value=1,
@@ -172,13 +146,11 @@ with tab1:
         step=1
     )
     
-    # Criar colunas para entrada de dados
     st.markdown("**Ativos e Pesos:**")
     
     tickers = []
     pesos = []
     
-    # Criar linhas para cada ativo
     for i in range(num_ativos):
         col1, col2, col3 = st.columns([3, 2, 1])
         
@@ -205,12 +177,10 @@ with tab1:
         
         with col3:
             if ticker:
-                # Buscar preço atual
                 preco = obter_preco_atual(ticker)
                 if preco:
                     st.metric("Preço", f"R$ {preco:.2f}", label_visibility="collapsed")
     
-    # Validar soma dos pesos
     soma_pesos = sum(pesos)
     
     col1, col2, col3 = st.columns([1, 1, 1])
@@ -224,15 +194,9 @@ with tab1:
         else:
             st.error(f"❌ Soma deve ser 100% (faltam {100-soma_pesos:.1f}%)")
     
-    with col3:
-        # Botão de normalizar
-        if st.button("⚖️ Normalizar Pesos", use_container_width=True):
-            st.info("Pesos normalizados automaticamente ao criar")
-    
     st.markdown("---")
     
-    # Botões de ação
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns(3)
     
     with col1:
         criar_btn = st.button("✅ Criar Portfólio", type="primary", use_container_width=True)
@@ -243,23 +207,7 @@ with tab1:
     with col3:
         limpar_btn = st.button("🗑️ Limpar Campos", use_container_width=True)
     
-    with col4:
-        # Carregar portfólio existente
-        portfolios_existentes = listar_portfolios()
-        if portfolios_existentes:
-            carregar_nome = st.selectbox(
-                "Carregar",
-                [""] + portfolios_existentes,
-                label_visibility="collapsed"
-            )
-            if carregar_nome:
-                portfolio_carregado = carregar_portfolio(carregar_nome)
-                if portfolio_carregado:
-                    st.success(f"✅ '{carregar_nome}' carregado!")
-    
-    # Ações dos botões
     if criar_btn or salvar_btn:
-        # Validações
         if not nome_portfolio:
             st.error("❌ Nome do portfólio é obrigatório!")
         elif not all(tickers):
@@ -268,11 +216,9 @@ with tab1:
             st.error(f"❌ Soma dos pesos deve ser 100% (atual: {soma_pesos:.1f}%)")
         else:
             try:
-                # Converter datas
                 data_inicio_dt = datetime.combine(data_inicio, datetime.min.time())
                 data_fim_dt = datetime.combine(data_fim, datetime.min.time())
                 
-                # Criar portfólio
                 sucesso = criar_portfolio(
                     nome=nome_portfolio,
                     tickers=tickers,
@@ -285,16 +231,13 @@ with tab1:
                 if sucesso:
                     st.success(f"✅ Portfólio '{nome_portfolio}' criado com sucesso!")
                     
-                    # Se pediu para salvar
                     if salvar_btn:
                         if salvar_portfolio(nome_portfolio):
                             st.success(f"💾 Portfólio salvo em arquivo!")
                         else:
                             st.warning("⚠️ Erro ao salvar em arquivo")
                     
-                    # Definir como ativo
                     definir_portfolio_ativo(nome_portfolio)
-                    
                     st.balloons()
                 else:
                     st.error(f"❌ Portfólio '{nome_portfolio}' já existe!")
@@ -313,7 +256,6 @@ with tab1:
 with tab2:
     st.subheader("Portfólios Salvos")
     
-    # Carregar todos do arquivo
     portfolio_manager.carregar_todos()
     
     portfolios = listar_portfolios()
@@ -323,14 +265,12 @@ with tab2:
     else:
         st.success(f"📊 {len(portfolios)} portfólio(s) encontrado(s)")
         
-        # Portfólio ativo
         portfolio_ativo = obter_portfolio_ativo()
         if portfolio_ativo:
             st.info(f"🎯 Portfólio ativo: **{portfolio_ativo.nome}**")
         
         st.markdown("---")
         
-        # Listar portfólios
         for nome in portfolios:
             portfolio = carregar_portfolio(nome)
             
@@ -344,7 +284,6 @@ with tab2:
                         st.markdown(f"**Criado em:** {portfolio.criado_em.strftime('%d/%m/%Y %H:%M')}")
                         st.markdown(f"**Modificado em:** {portfolio.modificado_em.strftime('%d/%m/%Y %H:%M')}")
                         
-                        # Mostrar ativos e pesos
                         st.markdown("**Composição:**")
                         df_composicao = pd.DataFrame({
                             'Ativo': portfolio.tickers,
@@ -353,7 +292,6 @@ with tab2:
                         st.dataframe(df_composicao, use_container_width=True, hide_index=True)
                     
                     with col2:
-                        # Botões de ação
                         if st.button(f"🎯 Ativar", key=f"ativar_{nome}", use_container_width=True):
                             definir_portfolio_ativo(nome)
                             st.success(f"✅ '{nome}' ativado!")
@@ -385,7 +323,6 @@ with tab3:
     if len(portfolios) < 2:
         st.warning("⚠️ Você precisa ter pelo menos 2 portfólios para comparar!")
     else:
-        # Selecionar portfólios para comparar
         portfolios_selecionados = st.multiselect(
             "Selecione os portfólios para comparar",
             portfolios,
@@ -396,15 +333,12 @@ with tab3:
             st.info("👆 Selecione pelo menos 2 portfólios para comparar")
         else:
             st.markdown("---")
-            
-            # Tabela de comparação básica
             st.markdown("### 📊 Comparação Básica")
+            
             df_comparacao = portfolio_manager.comparar(portfolios_selecionados)
             st.dataframe(df_comparacao, use_container_width=True, hide_index=True)
             
             st.markdown("---")
-            
-            # Comparação de composição
             st.markdown("### 🎯 Composição dos Portfólios")
             
             cols = st.columns(len(portfolios_selecionados))
@@ -415,7 +349,6 @@ with tab3:
                 with cols[idx]:
                     st.markdown(f"**{nome}**")
                     
-                    # Gráfico de pizza
                     fig = go.Figure(data=[go.Pie(
                         labels=portfolio.tickers,
                         values=[p*100 for p in portfolio.pesos],
@@ -430,55 +363,11 @@ with tab3:
                     
                     st.plotly_chart(fig, use_container_width=True)
                     
-                    # Tabela de composição
                     df_comp = pd.DataFrame({
                         'Ativo': portfolio.tickers,
                         'Peso': [f"{p*100:.1f}%" for p in portfolio.pesos]
                     })
                     st.dataframe(df_comp, use_container_width=True, hide_index=True)
-            
-            st.markdown("---")
-            
-            # Comparação de ativos únicos/comuns
-            st.markdown("### 🔍 Análise de Ativos")
-            
-            # Coletar todos os ativos
-            todos_ativos = set()
-            ativos_por_portfolio = {}
-            
-            for nome in portfolios_selecionados:
-                portfolio = carregar_portfolio(nome)
-                ativos = set(portfolio.tickers)
-                todos_ativos.update(ativos)
-                ativos_por_portfolio[nome] = ativos
-            
-            # Ativos comuns
-            ativos_comuns = set.intersection(*ativos_por_portfolio.values())
-            
-            # Ativos únicos
-            ativos_unicos = {}
-            for nome, ativos in ativos_por_portfolio.items():
-                unicos = ativos - set.union(*[a for n, a in ativos_por_portfolio.items() if n != nome])
-                if unicos:
-                    ativos_unicos[nome] = unicos
-            
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                st.metric("Total de Ativos Únicos", len(todos_ativos))
-            
-            with col2:
-                st.metric("Ativos Comuns", len(ativos_comuns))
-                if ativos_comuns:
-                    st.write(", ".join(sorted(ativos_comuns)))
-            
-            with col3:
-                st.metric("Portfólios com Ativos Únicos", len(ativos_unicos))
-            
-            if ativos_unicos:
-                st.markdown("**Ativos Únicos por Portfólio:**")
-                for nome, unicos in ativos_unicos.items():
-                    st.write(f"- **{nome}:** {', '.join(sorted(unicos))}")
 
 
 # ==========================================
@@ -493,7 +382,6 @@ with tab4:
     if not portfolios:
         st.warning("⚠️ Nenhum portfólio disponível para análise")
     else:
-        # Selecionar portfólio
         portfolio_selecionado = st.selectbox(
             "Selecione um portfólio para análise detalhada",
             portfolios,
@@ -505,7 +393,6 @@ with tab4:
             
             st.markdown("---")
             
-            # Informações básicas
             col1, col2, col3, col4 = st.columns(4)
             
             with col1:
@@ -523,7 +410,6 @@ with tab4:
             
             st.markdown("---")
             
-            # Buscar dados históricos
             with st.spinner("Buscando dados históricos..."):
                 df_precos = get_price_history(
                     portfolio.tickers,
@@ -534,14 +420,10 @@ with tab4:
             if df_precos.empty:
                 st.error("❌ Não foi possível obter dados históricos")
             else:
-                # Calcular retornos
                 df_retornos = df_precos.pct_change().dropna()
-                
-                # Retorno do portfólio
                 retorno_portfolio = (df_retornos * portfolio.pesos).sum(axis=1)
                 retorno_acumulado = (1 + retorno_portfolio).cumprod()
                 
-                # Métricas de performance
                 st.markdown("### 📈 Performance")
                 
                 col1, col2, col3, col4 = st.columns(4)
@@ -564,13 +446,10 @@ with tab4:
                     st.metric("Sharpe Ratio", f"{sharpe:.2f}")
                 
                 st.markdown("---")
-                
-                # Gráfico de evolução
                 st.markdown("### 📊 Evolução do Portfólio")
                 
                 fig = go.Figure()
                 
-                # Linha do portfólio
                 fig.add_trace(go.Scatter(
                     x=retorno_acumulado.index,
                     y=retorno_acumulado.values,
@@ -579,7 +458,6 @@ with tab4:
                     line=dict(color='blue', width=2)
                 ))
                 
-                # Linhas dos ativos individuais
                 for ticker in portfolio.tickers:
                     if ticker in df_precos.columns:
                         retorno_ativo = (df_precos[ticker] / df_precos[ticker].iloc[0])
@@ -601,29 +479,6 @@ with tab4:
                 )
                 
                 st.plotly_chart(fig, use_container_width=True)
-                
-                st.markdown("---")
-                
-                # Tabela de contribuição
-                st.markdown("### 🎯 Contribuição por Ativo")
-                
-                contribuicoes = []
-                for i, ticker in enumerate(portfolio.tickers):
-                    if ticker in df_retornos.columns:
-                        ret_ativo = df_retornos[ticker].mean() * 252 * 100
-                        contrib = ret_ativo * portfolio.pesos[i]
-                        vol_ativo = df_retornos[ticker].std() * (252 ** 0.5) * 100
-                        
-                        contribuicoes.append({
-                            'Ativo': ticker,
-                            'Peso': f"{portfolio.pesos[i]*100:.2f}%",
-                            'Retorno Anual': f"{ret_ativo:.2f}%",
-                            'Contribuição': f"{contrib:.2f}%",
-                            'Volatilidade': f"{vol_ativo:.2f}%"
-                        })
-                
-                df_contrib = pd.DataFrame(contribuicoes)
-                st.dataframe(df_contrib, use_container_width=True, hide_index=True)
 
 
 # ==========================================
@@ -639,13 +494,13 @@ with tab5:
     if not portfolios:
         st.warning("⚠️ Nenhum portfólio disponível. Crie um portfólio na aba 'Criar/Editar' primeiro!")
     else:
-        # Seleção do portfólio manual
         st.markdown("### 📁 Selecione seu Portfólio Manual")
         
         portfolio_manual_nome = st.selectbox(
             "Portfólio Manual",
             portfolios,
-            index=portfolios.index(st.session_state.portfolio_ativo) if st.session_state.portfolio_ativo in portfolios else 0
+            index=portfolios.index(st.session_state.portfolio_ativo) if st.session_state.portfolio_ativo in portfolios else 0,
+            key="select_portfolio_manual"
         )
         
         portfolio_manual = carregar_portfolio(portfolio_manual_nome)
@@ -654,8 +509,6 @@ with tab5:
             st.error("❌ Erro ao carregar portfólio")
         else:
             st.markdown("---")
-            
-            # Configurações de otimização
             st.markdown("### ⚙️ Configurações de Otimização")
             
             col1, col2 = st.columns(2)
@@ -671,15 +524,13 @@ with tab5:
                 usar_mesmos_ativos = st.checkbox(
                     "Usar mesmos ativos do portfólio manual",
                     value=True,
-                    help="Se marcado, otimiza apenas redistribuindo os pesos."
+                    help="Se marcado, otimiza apenas redistribuindo os pesos"
                 )
             
-            # Botão de otimizar
             if st.button("🚀 Calcular Portfólio Otimizado", type="primary", use_container_width=True):
                 
                 with st.spinner("🔄 Calculando portfólio otimizado..."):
                     
-                    # Buscar dados históricos
                     df_precos = get_price_history(
                         portfolio_manual.tickers,
                         portfolio_manual.data_inicio,
@@ -689,46 +540,34 @@ with tab5:
                     if df_precos.empty:
                         st.error("❌ Não foi possível obter dados históricos")
                     else:
-                        # Calcular retornos e covariância
                         df_retornos = df_precos.pct_change().dropna()
                         retornos_medios = df_retornos.mean()
                         matriz_cov = df_retornos.cov()
                         
-                        # Otimização
                         num_ativos = len(portfolio_manual.tickers)
                         
                         def portfolio_stats(pesos, retornos, cov_matrix):
-                            """Calcula estatísticas do portfólio"""
                             retorno = np.dot(pesos, retornos) * 252
                             volatilidade = np.sqrt(np.dot(pesos.T, np.dot(cov_matrix * 252, pesos)))
                             sharpe = retorno / volatilidade if volatilidade > 0 else 0
                             return retorno, volatilidade, sharpe
                         
                         def objetivo_sharpe(pesos, retornos, cov_matrix):
-                            """Objetivo: maximizar Sharpe (minimizar -Sharpe)"""
                             _, _, sharpe = portfolio_stats(pesos, retornos, cov_matrix)
                             return -sharpe
                         
                         def objetivo_volatilidade(pesos, retornos, cov_matrix):
-                            """Objetivo: minimizar volatilidade"""
                             _, volatilidade, _ = portfolio_stats(pesos, retornos, cov_matrix)
                             return volatilidade
                         
                         def objetivo_retorno(pesos, retornos, cov_matrix):
-                            """Objetivo: maximizar retorno (minimizar -retorno)"""
                             retorno, _, _ = portfolio_stats(pesos, retornos, cov_matrix)
                             return -retorno
                         
-                        # Restrições e bounds
-                        restricoes = [
-                            {'type': 'eq', 'fun': lambda x: np.sum(x) - 1}
-                        ]
+                        restricoes = [{'type': 'eq', 'fun': lambda x: np.sum(x) - 1}]
                         bounds = tuple((0, 1) for _ in range(num_ativos))
-                        
-                        # Pesos iniciais (iguais)
                         pesos_iniciais = np.array([1.0 / num_ativos] * num_ativos)
                         
-                        # Escolher função objetivo
                         if metodo_otimizacao == "Sharpe Máximo":
                             objetivo = objetivo_sharpe
                         elif metodo_otimizacao == "Mínima Volatilidade":
@@ -736,7 +575,6 @@ with tab5:
                         else:
                             objetivo = objetivo_retorno
                         
-                        # Otimizar
                         resultado = minimize(
                             objetivo,
                             pesos_iniciais,
@@ -749,15 +587,14 @@ with tab5:
                         if not resultado.success:
                             st.error("❌ Falha na otimização")
                         else:
-                            # Pesos otimizados
                             pesos_otimizados = resultado.x
                             
-                            # Salvar no session_state
                             st.session_state.portfolio_otimizado = {
                                 'tickers': portfolio_manual.tickers,
                                 'pesos': pesos_otimizados.tolist(),
                                 'metodo': metodo_otimizacao,
-                                'data_calculo': datetime.now()
+                                'data_calculo': datetime.now(),
+                                'portfolio_base': portfolio_manual_nome
                             }
                             
                             st.success("✅ Portfólio otimizado calculado com sucesso!")
@@ -766,37 +603,34 @@ with tab5:
             # Mostrar comparação se já foi calculado
             if 'portfolio_otimizado' in st.session_state:
                 
-                st.markdown("---")
-                st.markdown("## 📊 Comparação Detalhada")
-                
-                # Dados do portfólio otimizado
-                pesos_otimizados = st.session_state.portfolio_otimizado['pesos']
-                metodo = st.session_state.portfolio_otimizado['metodo']
-                
-                # Buscar dados
-                df_precos = get_price_history(
-                    portfolio_manual.tickers,
-                    portfolio_manual.data_inicio,
-                    portfolio_manual.data_fim
-                )
-                
-                if not df_precos.empty:
+                # Verificar se o portfólio otimizado é do portfólio manual atual
+                if st.session_state.portfolio_otimizado.get('portfolio_base') != portfolio_manual_nome:
+                    st.warning("⚠️ O portfólio otimizado foi calculado para outro portfólio. Clique em 'Calcular Portfólio Otimizado' novamente.")
+                else:
                     
-                    # Calcular métricas para ambos
-                    metricas_manual = calcular_metricas_portfolio(df_precos, portfolio_manual.pesos)
-                    metricas_otimizado = calcular_metricas_portfolio(df_precos, pesos_otimizados)
+                    st.markdown("---")
+                    st.markdown("## 📊 Comparação Detalhada")
                     
-                    if metricas_manual and metricas_otimizado:
+                    pesos_otimizados = st.session_state.portfolio_otimizado['pesos']
+                    metodo = st.session_state.portfolio_otimizado['metodo']
+                    
+                    df_precos = get_price_history(
+                        portfolio_manual.tickers,
+                        portfolio_manual.data_inicio,
+                        portfolio_manual.data_fim
+                    )
+                    
+                    if not df_precos.empty:
                         
-                        # SEÇÃO 1: Comparação de Métricas
+                        metricas_manual = calcular_metricas_portfolio(df_precos, portfolio_manual.pesos)
+                        metricas_otimizado = calcular_metricas_portfolio(df_precos, pesos_otimizados)
+                        
                         st.markdown("### 📈 Comparação de Performance")
                         
                         col1, col2, col3 = st.columns(3)
                         
-                        # Retorno
                         with col1:
                             st.markdown("**Retorno Anualizado**")
-                            
                             subcol1, subcol2 = st.columns(2)
                             with subcol1:
                                 st.metric("Manual", f"{metricas_manual['retorno_anual']:.2f}%")
@@ -804,10 +638,8 @@ with tab5:
                                 delta = metricas_otimizado['retorno_anual'] - metricas_manual['retorno_anual']
                                 st.metric("Otimizado", f"{metricas_otimizado['retorno_anual']:.2f}%", delta=f"{delta:+.2f}%")
                         
-                        # Volatilidade
                         with col2:
                             st.markdown("**Volatilidade Anual**")
-                            
                             subcol1, subcol2 = st.columns(2)
                             with subcol1:
                                 st.metric("Manual", f"{metricas_manual['volatilidade']:.2f}%")
@@ -815,10 +647,8 @@ with tab5:
                                 delta = metricas_otimizado['volatilidade'] - metricas_manual['volatilidade']
                                 st.metric("Otimizado", f"{metricas_otimizado['volatilidade']:.2f}%", delta=f"{delta:+.2f}%", delta_color="inverse")
                         
-                        # Sharpe
                         with col3:
                             st.markdown("**Sharpe Ratio**")
-                            
                             subcol1, subcol2 = st.columns(2)
                             with subcol1:
                                 st.metric("Manual", f"{metricas_manual['sharpe']:.2f}")
@@ -827,13 +657,10 @@ with tab5:
                                 st.metric("Otimizado", f"{metricas_otimizado['sharpe']:.2f}", delta=f"{delta:+.2f}")
                         
                         st.markdown("---")
-                        
-                        # SEÇÃO 2: Comparação de Composição
                         st.markdown("### 🎯 Comparação de Composição")
                         
                         col1, col2 = st.columns(2)
                         
-                        # Portfólio Manual
                         with col1:
                             st.markdown("**Portfólio Manual**")
                             
@@ -843,7 +670,7 @@ with tab5:
                                 hole=0.4
                             )])
                             
-                            fig_manual.update_layout(height=350, margin=dict(l=20, r=20, t=30, b=20))
+                            fig_manual.update_layout(height=350)
                             st.plotly_chart(fig_manual, use_container_width=True)
                             
                             df_manual = pd.DataFrame({
@@ -852,7 +679,6 @@ with tab5:
                             })
                             st.dataframe(df_manual, use_container_width=True, hide_index=True)
                         
-                        # Portfólio Otimizado
                         with col2:
                             st.markdown(f"**Portfólio Otimizado ({metodo})**")
                             
@@ -862,7 +688,7 @@ with tab5:
                                 hole=0.4
                             )])
                             
-                            fig_otimizado.update_layout(height=350, margin=dict(l=20, r=20, t=30, b=20))
+                            fig_otimizado.update_layout(height=350)
                             st.plotly_chart(fig_otimizado, use_container_width=True)
                             
                             df_otimizado = pd.DataFrame({
@@ -872,8 +698,6 @@ with tab5:
                             st.dataframe(df_otimizado, use_container_width=True, hide_index=True)
                         
                         st.markdown("---")
-                        
-                        # SEÇÃO 3: Diferença de Pesos
                         st.markdown("### 📊 Análise de Diferenças")
                         
                         diferencas = []
@@ -891,8 +715,6 @@ with tab5:
                         st.dataframe(df_diferencas, use_container_width=True, hide_index=True)
                         
                         st.markdown("---")
-                        
-                        # SEÇÃO 4: Evolução Comparada
                         st.markdown("### 📈 Evolução Comparada")
                         
                         fig_evolucao = go.Figure()
@@ -924,8 +746,6 @@ with tab5:
                         st.plotly_chart(fig_evolucao, use_container_width=True)
                         
                         st.markdown("---")
-                        
-                        # SEÇÃO 5: Recomendações
                         st.markdown("### 💡 Recomendações")
                         
                         col1, col2 = st.columns(2)
@@ -934,9 +754,9 @@ with tab5:
                             st.markdown("#### 📊 Análise Quantitativa")
                             
                             if metricas_otimizado['sharpe'] > metricas_manual['sharpe']:
-                                st.success(f"✅ O portfólio otimizado tem **melhor relação risco/retorno**")
+                                st.success(f"✅ O portfólio otimizado tem **melhor relação risco/retorno** (Sharpe {metricas_otimizado['sharpe']:.2f} vs {metricas_manual['sharpe']:.2f})")
                             else:
-                                st.info(f"ℹ️ O portfólio manual tem melhor Sharpe")
+                                st.info(f"ℹ️ O portfólio manual tem melhor Sharpe ({metricas_manual['sharpe']:.2f} vs {metricas_otimizado['sharpe']:.2f})")
                             
                             if metricas_otimizado['volatilidade'] < metricas_manual['volatilidade']:
                                 reducao = ((metricas_manual['volatilidade'] - metricas_otimizado['volatilidade']) / metricas_manual['volatilidade']) * 100
@@ -944,7 +764,7 @@ with tab5:
                             
                             if metricas_otimizado['retorno_anual'] > metricas_manual['retorno_anual']:
                                 ganho = metricas_otimizado['retorno_anual'] - metricas_manual['retorno_anual']
-                                st.success(f"✅ O portfólio otimizado teria gerado **{ganho:.2f}% a mais**")
+                                st.success(f"✅ O portfólio otimizado teria gerado **{ganho:.2f}% a mais de retorno anual**")
                         
                         with col2:
                             st.markdown("#### 🎯 Ações Sugeridas")
@@ -964,7 +784,7 @@ with tab5:
                                 sucesso = criar_portfolio(
                                     nome=nome_otimizado,
                                     tickers=portfolio_manual.tickers,
-                                    pesos=pesos_otimizados,
+                                    pesos=pesos_otimizados.tolist(),
                                     data_inicio=portfolio_manual.data_inicio,
                                     data_fim=portfolio_manual.data_fim,
                                     descricao=f"Versão otimizada de '{portfolio_manual.nome}' usando {metodo}"
@@ -982,4 +802,4 @@ with tab5:
 # ==========================================
 
 st.markdown("---")
-st.markdown("💡 **Dica:** Use a aba 'Comparar' para visualizar diferenças entre estratégias!")
+st.markdown("💡 **Dica:** Use a aba 'Otimizado vs Manual' para melhorar seu portfólio!")
