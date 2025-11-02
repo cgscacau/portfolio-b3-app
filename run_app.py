@@ -7,13 +7,6 @@ import streamlit as st
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-import sys
-
-# Adicionar diretório raiz ao path
-root_dir = Path(__file__).parent
-sys.path.insert(0, str(root_dir))
-
-from core import utils
 
 # Configurar logging
 log_dir = Path("logs")
@@ -38,15 +31,13 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# CSS customizado para tema futurista
+# CSS customizado
 st.markdown("""
     <style>
-    /* Estilos globais */
     .main {
         padding: 2rem;
     }
     
-    /* Cards com efeito glassmorphism */
     .metric-card {
         background: rgba(38, 39, 48, 0.6);
         border-radius: 12px;
@@ -63,7 +54,6 @@ st.markdown("""
         transform: translateY(-2px);
     }
     
-    /* Títulos com gradiente */
     .gradient-title {
         background: linear-gradient(90deg, #00D9FF 0%, #7B2FFF 100%);
         -webkit-background-clip: text;
@@ -73,14 +63,6 @@ st.markdown("""
         margin-bottom: 1rem;
     }
     
-    /* Tooltips customizados */
-    .tooltip-icon {
-        color: #00D9FF;
-        cursor: help;
-        margin-left: 0.5rem;
-    }
-    
-    /* Botões com efeito neon */
     .stButton>button {
         border-radius: 8px;
         border: 1px solid #00D9FF;
@@ -96,28 +78,11 @@ st.markdown("""
         box-shadow: 0 0 20px rgba(0, 217, 255, 0.5);
     }
     
-    /* Tabelas com hover effect */
-    .dataframe {
-        border-radius: 8px;
-        overflow: hidden;
-    }
-    
-    /* Sidebar styling */
-    .css-1d391kg {
-        background: rgba(14, 17, 23, 0.95);
-    }
-    
-    /* Métricas destacadas */
     .highlight-metric {
         font-size: 2rem;
         font-weight: bold;
         color: #00D9FF;
         text-align: center;
-    }
-    
-    /* Alertas customizados */
-    .stAlert {
-        border-radius: 8px;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -126,66 +91,33 @@ st.markdown("""
 def initialize_session_state():
     """Inicializa variáveis de sessão."""
     
-    # Usar função do utils para garantir todas as variáveis
-    utils.ensure_session_state_initialized()
+    defaults = {
+        'selected_tickers': [],
+        'universe_df': None,
+        'filtered_universe_df': None,
+        'liquidity_applied': False,
+        'price_data': None,
+        'dividend_data': {},
+        'expected_returns': None,
+        'cov_matrix': None,
+        'efficient_frontier': None,
+        'optimized_portfolios': {},
+        'specialized_portfolios': {},
+        'recommended_portfolio': None,
+        'share_quantities': {},
+        'dividend_metrics': None,
+        'period_start': datetime.now() - timedelta(days=365),
+        'period_end': datetime.now(),
+        'risk_free_rate': 0.1175,
+        'max_weight_per_asset': 0.15,
+        'max_weight_per_sector': 0.40,
+        'lambda_penalty': 0.5,
+        'investment_amount': 10000.0,
+    }
     
-    # Valores padrão específicos
-    if 'period_start' not in st.session_state:
-        st.session_state.period_start = datetime.now() - timedelta(days=365)
-    
-    if 'period_end' not in st.session_state:
-        st.session_state.period_end = datetime.now()
-    
-    if 'risk_free_rate' not in st.session_state:
-        st.session_state.risk_free_rate = 0.1175  # Selic aproximada
-    
-    if 'max_weight_per_asset' not in st.session_state:
-        st.session_state.max_weight_per_asset = 0.15
-    
-    if 'max_weight_per_sector' not in st.session_state:
-        st.session_state.max_weight_per_sector = 0.40
-    
-    if 'lambda_penalty' not in st.session_state:
-        st.session_state.lambda_penalty = 0.5
-    
-    if 'investment_amount' not in st.session_state:
-        st.session_state.investment_amount = 10000.0
-
-
-def check_yfinance_on_startup():
-    """Verifica disponibilidade do yfinance na inicialização."""
-    
-    if not st.session_state.get('yfinance_checked', False):
-        
-        with st.spinner("🔍 Verificando disponibilidade do yfinance..."):
-            yf_works = utils.check_yfinance_availability()
-            
-            st.session_state.yfinance_works = yf_works
-            st.session_state.yfinance_checked = True
-            
-            if not yf_works:
-                st.session_state.use_mock_data = True
-                
-                st.warning("""
-                    ⚠️ **yfinance não está disponível no momento.**
-                    
-                    O aplicativo está configurado para usar **dados simulados** automaticamente.
-                    
-                    **Dados simulados são adequados para:**
-                    - Testar a interface e funcionalidades
-                    - Entender o fluxo de análise
-                    - Demonstrações
-                    
-                    **Para análise real:**
-                    - Tente novamente mais tarde
-                    - Verifique sua conexão com a internet
-                    - O yfinance pode estar temporariamente indisponível
-                """)
-                
-                logger.warning("yfinance não disponível - usando modo simulado")
-            else:
-                st.success("✅ yfinance disponível - dados reais habilitados")
-                logger.info("yfinance disponível")
+    for key, default_value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = default_value
 
 
 def render_sidebar():
@@ -196,41 +128,7 @@ def render_sidebar():
         
         st.markdown("---")
         
-        # ========================================
-        # MODO DE OPERAÇÃO
-        # ========================================
-        st.markdown("### 🔧 Modo de Operação")
-        
-        # Verificar se yfinance está disponível
-        yf_available = st.session_state.get('yfinance_works', False)
-        
-        if not yf_available:
-            st.error("📡 yfinance indisponível")
-            st.caption("Usando dados simulados obrigatoriamente")
-            use_mock_data = True
-            st.session_state.use_mock_data = True
-        else:
-            use_mock_data = st.toggle(
-                "Usar Dados Simulados",
-                value=st.session_state.get('use_mock_data', False),
-                key="use_mock_toggle",
-                help="Ative para usar dados simulados mesmo com yfinance disponível"
-            )
-            
-            st.session_state.use_mock_data = use_mock_data
-        
-        if use_mock_data:
-            st.warning("⚠️ Modo simulado ativo")
-            st.caption("Dados gerados aleatoriamente")
-        else:
-            st.info("📡 Modo real ativo")
-            st.caption("Usando yfinance")
-        
-        st.markdown("---")
-        
-        # ========================================
         # PERÍODO DE ANÁLISE
-        # ========================================
         st.markdown("### 📅 Período de Análise")
         
         period_option = st.radio(
@@ -267,16 +165,14 @@ def render_sidebar():
         st.session_state.period_start = start_date
         st.session_state.period_end = end_date
         
-        # Validação do período
+        # Validação
         days_diff = (end_date - start_date).days
         if days_diff < 252:
             st.warning("⚠️ Período < 1 ano pode gerar métricas instáveis")
         
         st.markdown("---")
         
-        # ========================================
         # TAXA LIVRE DE RISCO
-        # ========================================
         st.markdown("### 💰 Taxa Livre de Risco")
         
         st.session_state.risk_free_rate = st.number_input(
@@ -290,9 +186,7 @@ def render_sidebar():
         
         st.markdown("---")
         
-        # ========================================
-        # RESTRIÇÕES DE ALOCAÇÃO
-        # ========================================
+        # RESTRIÇÕES
         st.markdown("### 🛡️ Restrições de Alocação")
         
         st.session_state.max_weight_per_asset = st.slider(
@@ -310,14 +204,12 @@ def render_sidebar():
             max_value=100,
             value=int(st.session_state.max_weight_per_sector * 100),
             step=5,
-            help="Limite por setor para diversificação"
+            help="Limite por setor"
         ) / 100
         
         st.markdown("---")
         
-        # ========================================
-        # OTIMIZAÇÃO DE DIVIDENDOS
-        # ========================================
+        # OTIMIZAÇÃO DIVIDENDOS
         st.markdown("### 🧮 Otimização de Dividendos")
         
         st.session_state.lambda_penalty = st.slider(
@@ -326,14 +218,12 @@ def render_sidebar():
             max_value=1.0,
             value=st.session_state.lambda_penalty,
             step=0.05,
-            help="Maior = prioriza regularidade vs. yield total"
+            help="Maior = prioriza regularidade"
         )
         
         st.markdown("---")
         
-        # ========================================
         # VALOR A INVESTIR
-        # ========================================
         st.markdown("### 💵 Valor a Investir")
         
         st.session_state.investment_amount = st.number_input(
@@ -347,21 +237,12 @@ def render_sidebar():
         
         st.markdown("---")
         
-        # ========================================
-        # INFORMAÇÕES DO SISTEMA
-        # ========================================
+        # INFORMAÇÕES
         st.markdown("### ℹ️ Informações")
         
         st.caption(f"**Versão:** 1.0.0")
         st.caption(f"**Data:** {datetime.now().strftime('%d/%m/%Y')}")
         st.caption(f"**Ativos:** {len(st.session_state.get('selected_tickers', []))}")
-        
-        # Status do yfinance
-        if st.session_state.get('yfinance_checked'):
-            if st.session_state.get('yfinance_works'):
-                st.caption("**yfinance:** ✅ Disponível")
-            else:
-                st.caption("**yfinance:** ❌ Indisponível")
 
 
 def main():
@@ -369,16 +250,9 @@ def main():
     
     # Inicializar
     initialize_session_state()
-    
-    # Verificar yfinance na primeira execução
-    check_yfinance_on_startup()
-    
-    # Renderizar sidebar
     render_sidebar()
     
-    # ========================================
-    # HEADER PRINCIPAL
-    # ========================================
+    # HEADER
     st.markdown('<p class="gradient-title">📈 Portfolio B3 - Análise de Dividendos</p>', 
                 unsafe_allow_html=True)
     
@@ -387,9 +261,7 @@ def main():
     e **otimização de risco-retorno** para ativos da B3.
     """)
     
-    # ========================================
-    # CARDS DE MÉTRICAS RÁPIDAS
-    # ========================================
+    # CARDS DE MÉTRICAS
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
@@ -404,7 +276,7 @@ def main():
         days = (st.session_state.period_end - st.session_state.period_start).days
         st.markdown("""
         <div class="metric-card">
-            <h4>📅 Período de Análise</h4>
+            <h4>📅 Período</h4>
             <p class="highlight-metric">{} dias</p>
         </div>
         """.format(days), unsafe_allow_html=True)
@@ -412,7 +284,7 @@ def main():
     with col3:
         st.markdown("""
         <div class="metric-card">
-            <h4>💰 Taxa Livre de Risco</h4>
+            <h4>💰 Taxa Livre Risco</h4>
             <p class="highlight-metric">{:.2f}%</p>
         </div>
         """.format(st.session_state.risk_free_rate * 100), unsafe_allow_html=True)
@@ -427,99 +299,74 @@ def main():
     
     st.markdown("---")
     
-    # ========================================
-    # INSTRUÇÕES DE USO
-    # ========================================
+    # INSTRUÇÕES
     with st.expander("📖 Como usar este aplicativo", expanded=False):
         st.markdown("""
-        ### Fluxo de trabalho recomendado:
+        ### Fluxo de trabalho:
         
         1. **Selecionar Ativos** 🎯
-           - Use o menu lateral para navegar até "Selecionar Ativos"
-           - Filtre por setor/segmento ou selecione manualmente
-           - Apenas ativos líquidos são recomendados
+           - Use o menu lateral para navegar
+           - Filtre por liquidez e setor
+           - Selecione 10-30 ativos
         
         2. **Análise de Dividendos** 💸
-           - Visualize histórico de dividendos
-           - Analise regularidade dos pagamentos
-           - Veja calendário mensal projetado
+           - Histórico de pagamentos
+           - Índice de regularidade
+           - Calendário mensal
         
         3. **Portfólios Eficientes** 📊
-           - Explore a fronteira eficiente de Markowitz
-           - Compare diferentes estratégias de alocação
+           - Fronteira eficiente de Markowitz
+           - Otimização risco-retorno
         
         4. **Sharpe e MinVol** 🎯
-           - Carteiras otimizadas específicas
-           - Máximo Sharpe vs. Mínima Volatilidade vs. Dividendos Regulares
+           - Máximo Sharpe
+           - Mínima Volatilidade
+           - Dividendos Regulares
         
         5. **Resumo Executivo** 📋
-           - Recomendação final personalizada
-           - Quantidades exatas de ações a comprar
-           - Exportação de relatórios
+           - Recomendação personalizada
+           - Quantidades de ações
+           - Relatórios
         
-        ### Dicas importantes:
-        
-        - **Ajuste os parâmetros** no painel lateral conforme seu perfil
-        - **Períodos mais longos** (5-10 anos) geram análises mais robustas
-        - **Taxa livre de risco** afeta diretamente o cálculo do Sharpe
-        - **Restrições de concentração** protegem contra risco idiossincrático
-        
-        ### Modo de dados:
-        
-        - **Dados Reais:** Obtidos via yfinance (pode haver falhas)
-        - **Dados Simulados:** Gerados aleatoriamente para testes e demonstração
+        ### Dicas:
+        - Períodos longos (5-10 anos) = análises robustas
+        - Taxa livre de risco afeta o Sharpe
+        - Diversifique entre setores
         """)
     
-    # ========================================
-    # AVISOS IMPORTANTES
-    # ========================================
+    # AVISO LEGAL
     st.info("""
-    ℹ️ **Aviso Legal:** Este aplicativo é uma ferramenta de análise quantitativa e **não constitui 
-    recomendação de investimento**. Sempre consulte um profissional certificado antes de tomar 
-    decisões financeiras. Rentabilidade passada não garante resultados futuros.
+    ℹ️ **Aviso Legal:** Este aplicativo é uma ferramenta de análise e **não constitui 
+    recomendação de investimento**. Consulte um profissional certificado. 
+    Rentabilidade passada não garante resultados futuros.
     """)
     
-    # Aviso adicional se estiver em modo simulado
-    if st.session_state.get('use_mock_data', False):
-        st.warning("""
-        ⚠️ **Modo Simulado Ativo:** Os dados exibidos são gerados aleatoriamente e **não representam 
-        a realidade do mercado**. Use apenas para testar funcionalidades e entender o fluxo de análise.
-        """)
-    
-    # ========================================
-    # NAVEGAÇÃO RÁPIDA
-    # ========================================
-    st.markdown("### 🚀 Navegação Rápida")
+    # NAVEGAÇÃO
+    st.markdown("### 🚀 Navegação")
     
     st.markdown("""
-    Use o **menu lateral** (☰) para navegar entre as páginas:
+    Use o **menu lateral** (☰) para acessar:
     
-    - 🎯 **Selecionar Ativos** - Escolha os ativos para análise
-    - 💸 **Análise de Dividendos** - Histórico e regularidade
-    - 📊 **Portfólios Eficientes** - Fronteira de Markowitz
-    - 🎯 **Sharpe e MinVol** - Otimizações específicas
-    - 📋 **Resumo Executivo** - Recomendação final
+    - 🎯 **Selecionar Ativos**
+    - 💸 **Análise de Dividendos**
+    - 📊 **Portfólios Eficientes**
+    - 🎯 **Sharpe e MinVol**
+    - 📋 **Resumo Executivo**
     """)
     
-    # ========================================
-    # STATUS DO SISTEMA
-    # ========================================
+    # STATUS
     with st.expander("🔧 Status do Sistema", expanded=False):
         col1, col2 = st.columns(2)
         
         with col1:
             st.markdown("**Componentes:**")
             st.text("✅ Interface: OK")
-            st.text("✅ Módulos Core: OK")
+            st.text("✅ Módulos: OK")
             st.text("✅ Cache: OK")
-            
-            if st.session_state.get('yfinance_works'):
-                st.text("✅ yfinance: Disponível")
-            else:
-                st.text("❌ yfinance: Indisponível")
+            st.text("✅ yfinance: Ativo")
         
         with col2:
-            st.markdown("**Dados Carregados:**")
+            st.markdown("**Dados:**")
             
             if st.session_state.get('selected_tickers'):
                 st.text(f"✅ Ativos: {len(st.session_state.selected_tickers)}")
@@ -535,23 +382,13 @@ def main():
                 st.text("✅ Dividendos: Carregados")
             else:
                 st.text("⚪ Dividendos: Não carregados")
-            
-            if st.session_state.get('optimized_portfolios') or st.session_state.get('specialized_portfolios'):
-                total_portfolios = len(st.session_state.get('optimized_portfolios', {})) + \
-                                 len(st.session_state.get('specialized_portfolios', {}))
-                st.text(f"✅ Portfólios: {total_portfolios}")
-            else:
-                st.text("⚪ Portfólios: Nenhum")
     
-    # ========================================
     # FOOTER
-    # ========================================
     st.markdown("---")
     st.markdown("""
     <div style="text-align: center; color: #666; padding: 2rem 0;">
-        <p>Desenvolvido com ❤️ usando Streamlit | Dados via yfinance (ou simulados)</p>
+        <p>Desenvolvido com ❤️ usando Streamlit | Dados via yfinance</p>
         <p style="font-size: 0.8rem;">© 2025 Portfolio B3 Analytics</p>
-        <p style="font-size: 0.7rem;">Este é um projeto educacional e de demonstração</p>
     </div>
     """, unsafe_allow_html=True)
 
