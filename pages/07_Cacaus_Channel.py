@@ -127,6 +127,36 @@ def carregar_base_ativos():
         return ["PETR4", "VALE3", "ITUB4", "BBDC4", "ABEV3", "BBAS3", "WEGE3", "MGLU3"]
 
 
+def filtrar_ativos_por_tipo(base_completa, tipos_selecionados):
+    """Filtra ativos por tipo com lógica corrigida"""
+    if not tipos_selecionados:
+        return []
+    
+    tickers_filtrados = []
+    
+    for tipo in tipos_selecionados:
+        if tipo == "Ações":
+            # Ações terminam em 3, 4, 5, 6, 7, 8 (mas não 11 que são FIIs)
+            acoes = [t for t in base_completa 
+                    if len(t) >= 5 and t[-1].isdigit() and t[-1] in ['3','4','5','6','7','8'] 
+                    and not t.endswith('11')]
+            tickers_filtrados.extend(acoes)
+            
+        elif tipo == "FIIs":
+            # FIIs terminam em 11
+            fiis = [t for t in base_completa if t.endswith('11')]
+            tickers_filtrados.extend(fiis)
+            
+        elif tipo == "ETFs":
+            # ETFs geralmente têm 'B' no final ou estrutura diferente
+            etfs = [t for t in base_completa 
+                   if (t.endswith('B') or 'ETF' in t or len(t) <= 4 or 
+                       (len(t) >= 5 and not t[-1].isdigit()))]
+            tickers_filtrados.extend(etfs)
+    
+    return sorted(list(set(tickers_filtrados)))
+
+
 # ==========================================
 # FUNÇÕES DE CÁLCULO DO INDICADOR
 # ==========================================
@@ -462,6 +492,9 @@ with col_esquerda:
     
     if base_completa:
         st.caption(f"✅ {len(base_completa)} ativos disponíveis")
+    else:
+        st.error("❌ Erro ao carregar base de ativos")
+        st.stop()
     
     # Opções de seleção
     opcao_selecao = st.radio(
@@ -490,58 +523,91 @@ with col_esquerda:
     
     # OPÇÃO 2: Base B3
     elif opcao_selecao == "🌐 Base B3":
-        if base_completa:
+        
+        filtro_tipo = st.multiselect(
+            "Tipos de Ativos",
+            options=["Ações", "FIIs", "ETFs"],
+            default=["Ações"],
+            help="Selecione os tipos de ativos para análise"
+        )
+        
+        if filtro_tipo:
+            # Usar função corrigida de filtragem
+            tickers_filtrados = filtrar_ativos_por_tipo(base_completa, filtro_tipo)
             
-            filtro_tipo = st.multiselect(
-                "Tipos de Ativos",
-                options=["Ações", "FIIs", "ETFs"],
-                default=["Ações"]
-            )
+            # Debug: mostrar alguns exemplos
+            if tickers_filtrados:
+                st.success(f"✅ {len(tickers_filtrados)} ativos encontrados")
+                
+                # Mostrar alguns exemplos de cada tipo
+                with st.expander("📋 Ver exemplos dos ativos"):
+                    if "Ações" in filtro_tipo:
+                        acoes_exemplos = [t for t in tickers_filtrados if t[-1] in ['3','4','5','6','7','8'] and not t.endswith('11')][:10]
+                        if acoes_exemplos:
+                            st.write("**Ações:**", ", ".join(acoes_exemplos))
+                    
+                    if "FIIs" in filtro_tipo:
+                        fiis_exemplos = [t for t in tickers_filtrados if t.endswith('11')][:10]
+                        if fiis_exemplos:
+                            st.write("**FIIs:**", ", ".join(fiis_exemplos))
+                    
+                    if "ETFs" in filtro_tipo:
+                        etfs_exemplos = [t for t in tickers_filtrados if not t[-1].isdigit()][:10]
+                        if etfs_exemplos:
+                            st.write("**ETFs:**", ", ".join(etfs_exemplos))
+            else:
+                st.warning(f"❌ Nenhum ativo encontrado para os tipos selecionados")
+                st.info("💡 Tente selecionar outros tipos ou verifique a base de dados")
             
+            # Limite de ativos
             limite_ativos = st.number_input(
                 "Limite de Ativos",
-                min_value=5,
-                max_value=100,
-                value=30,
-                step=5
+                min_value=1,
+                max_value=min(200, len(tickers_filtrados)) if tickers_filtrados else 50,
+                value=min(30, len(tickers_filtrados)) if tickers_filtrados else 30,
+                step=5,
+                help="Número máximo de ativos para analisar"
             )
             
-            if filtro_tipo:
-                tickers_filtrados = []
-                
-                if "Ações" in filtro_tipo:
-                    tickers_filtrados.extend([t for t in base_completa if t[-1] in ['3', '4'] and not t.endswith('11')])
-                
-                if "FIIs" in filtro_tipo:
-                    tickers_filtrados.extend([t for t in base_completa if t.endswith('11')])
-                
-                if "ETFs" in filtro_tipo:
-                    tickers_filtrados.extend([t for t in base_completa if 'B' in t[-2:] and not t[-1].isdigit()])
-                
-                tickers = sorted(list(set(tickers_filtrados)))[:limite_ativos]
-                st.caption(f"📊 {len(tickers)} ativos selecionados")
-            else:
-                st.warning("Selecione pelo menos um tipo de ativo")
+            tickers = tickers_filtrados[:limite_ativos] if tickers_filtrados else []
+            st.caption(f"📊 {len(tickers)} ativos selecionados para análise")
+            
+        else:
+            st.warning("⚠️ Selecione pelo menos um tipo de ativo")
     
     # OPÇÃO 3: Manual
     else:
         tickers_input = st.text_area(
             "Digite os tickers (um por linha)",
-            value="ALPA4\nPETR4\nVALE3\nITUB4\nBBDC4",
-            height=120
+            value="ALPA4\nPETR4\nVALE3\nITUB4\nBBDC4\nBBAS3\nWEGE3",
+            height=150,
+            help="Digite um ticker por linha ou separados por vírgula"
         )
         
         if tickers_input.strip():
-            tickers_raw = tickers_input.replace(',', '\n').split('\n')
+            tickers_raw = tickers_input.replace(',', '\n').replace(';', '\n').split('\n')
             tickers = [t.strip().upper() for t in tickers_raw if t.strip()]
             st.caption(f"📊 {len(tickers)} ativos listados")
+            
+            # Mostrar os tickers que serão analisados
+            if tickers:
+                st.success(f"✅ Tickers: {', '.join(tickers[:10])}" + (f" e mais {len(tickers)-10}" if len(tickers) > 10 else ""))
         else:
-            st.warning("Digite pelo menos um ticker")
+            st.warning("⚠️ Digite pelo menos um ticker")
     
     # SCREENER
     st.markdown("---")
     
-    if st.button("🔍 Executar Screener", type="primary", use_container_width=True, disabled=not tickers):
+    # Mostrar botão apenas se há tickers selecionados
+    screener_habilitado = len(tickers) > 0
+    
+    if not screener_habilitado:
+        st.warning("⚠️ Selecione ativos para executar o screener")
+    
+    if st.button("🔍 Executar Screener", 
+                 type="primary", 
+                 use_container_width=True, 
+                 disabled=not screener_habilitado):
         
         convergencias = []
         sinais = []
@@ -623,23 +689,24 @@ with col_esquerda:
         st.session_state.cacaus_todos_dados = todos_dados
         
         # Estatísticas
-        st.metric("📊 Analisados", total_analisados)
-        st.metric("✅ Com Dados", total_com_dados)
-        st.metric("🔄 Convergências", len(convergencias))
-        st.metric("🎯 Sinais", len(sinais))
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("📊 Analisados", total_analisados)
+        col2.metric("✅ Com Dados", total_com_dados)
+        col3.metric("🔄 Convergências", len(convergencias))
+        col4.metric("🎯 Sinais", len(sinais))
         
         if sinais:
             st.success(f"🎯 {len(sinais)} sinal(is) ativo(s) encontrado(s)!")
         elif convergencias:
             st.info(f"🔄 {len(convergencias)} convergência(s) encontrada(s)")
         else:
-            st.warning("Nenhuma oportunidade encontrada")
+            st.warning("Nenhuma oportunidade encontrada no período")
         
         # Mostrar erros se houver poucos
-        if erros and len(erros) <= 5:
-            with st.expander(f"⚠️ {len(erros)} erro(s)"):
+        if erros and len(erros) <= 10:
+            with st.expander(f"⚠️ {len(erros)} erro(s) encontrado(s)"):
                 for erro in erros:
-                    st.caption(erro)
+                    st.caption(f"• {erro}")
     
     # LISTAS DE RESULTADOS
     st.markdown("---")
@@ -877,22 +944,11 @@ with st.expander("📖 Guia: Convergência vs Sinais"):
         """)
 
 st.markdown("""
-### 💡 Interpretação dos Gráficos
+### 💡 Como Selecionar Ativos
 
-Os **gráficos duplos** permitem comparar simultaneamente:
+**🌐 Base B3:** Use os filtros por tipo:
+- **Ações:** Terminam em 3, 4, 5, 6, 7, 8 (ex: PETR4, VALE3)
+- **FIIs:** Terminam em 11 (ex: HGLG11, KNRI11)  
+- **ETFs:** Estrutura diferente (ex: BOVA11, SMAL11)
 
-- **Lado Esquerdo (Diário):** Timing preciso e movimentos de curto prazo
-- **Lado Direito (Semanal):** Tendência principal e contexto de médio prazo
-
-**Cores dos Indicadores:**
-- 🔴 **Linha Vermelha:** Resistência (Linha Superior)
-- 🟢 **Linha Verde:** Suporte (Linha Inferior)  
-- ⚪ **Linha Branca:** Média do Canal
-- 🟠 **Linha Laranja Tracejada:** EMA da Média
-
-**Cruzamentos Importantes:**
-- Linha Branca **acima** da Laranja = Tendência de **Alta**
-- Linha Branca **abaixo** da Laranja = Tendência de **Baixa**
-
-⚠️ **Aviso Legal:** Esta é uma ferramenta de análise técnica educacional. Não constitui recomendação de investimento. Mercados financeiros envolvem risco de perda. Sempre consulte um profissional qualificado antes de investir.
-""")
+**✍️ Manual:** Digite um ticker por linha:
