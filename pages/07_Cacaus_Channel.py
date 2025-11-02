@@ -78,23 +78,101 @@ def resample_para_semanal(df):
     return df_semanal
 
 
-def detectar_convergencia(df_diario, df_semanal):
-    """Detecta convergência entre timeframes"""
-    sinal_diario = df_diario['sinal'].iloc[-1] if not df_diario.empty else 0
-    sinal_semanal = df_semanal['sinal'].iloc[-1] if not df_semanal.empty else 0
+def detectar_convergencia_com_cruzamento(df_diario, df_semanal, lookback=5):
+    """
+    Detecta convergência de CRUZAMENTOS entre timeframes
     
-    convergente = (sinal_diario == sinal_semanal) and (sinal_diario != 0)
+    Args:
+        df_diario: DataFrame com indicador no diário
+        df_semanal: DataFrame com indicador no semanal
+        lookback: Quantas barras olhar para trás para detectar cruzamento
+        
+    Returns:
+        Dict com resultado da convergência
+    """
     
-    if convergente:
-        direcao = 'COMPRA' if sinal_diario == 1 else 'VENDA'
-    else:
-        direcao = None
+    # Verificar se há dados suficientes
+    if len(df_diario) < lookback + 1 or len(df_semanal) < lookback + 1:
+        return {
+            'convergente': False,
+            'direcao': None,
+            'tipo_sinal': None,
+            'barra_cruzamento_diario': None,
+            'barra_cruzamento_semanal': None
+        }
+    
+    # Detectar cruzamento no DIÁRIO
+    cruzamento_diario = None
+    barra_cruz_diario = None
+    
+    for i in range(1, min(lookback + 1, len(df_diario))):
+        linha_media_atual = df_diario['linha_media'].iloc[-i]
+        ema_media_atual = df_diario['ema_media'].iloc[-i]
+        linha_media_anterior = df_diario['linha_media'].iloc[-(i+1)]
+        ema_media_anterior = df_diario['ema_media'].iloc[-(i+1)]
+        
+        # Cruzamento para CIMA (COMPRA)
+        if linha_media_anterior <= ema_media_anterior and linha_media_atual > ema_media_atual:
+            cruzamento_diario = 'COMPRA'
+            barra_cruz_diario = i
+            break
+        
+        # Cruzamento para BAIXO (VENDA)
+        if linha_media_anterior >= ema_media_anterior and linha_media_atual < ema_media_atual:
+            cruzamento_diario = 'VENDA'
+            barra_cruz_diario = i
+            break
+    
+    # Detectar cruzamento no SEMANAL
+    cruzamento_semanal = None
+    barra_cruz_semanal = None
+    
+    for i in range(1, min(lookback + 1, len(df_semanal))):
+        linha_media_atual = df_semanal['linha_media'].iloc[-i]
+        ema_media_atual = df_semanal['ema_media'].iloc[-i]
+        linha_media_anterior = df_semanal['linha_media'].iloc[-(i+1)]
+        ema_media_anterior = df_semanal['ema_media'].iloc[-(i+1)]
+        
+        # Cruzamento para CIMA (COMPRA)
+        if linha_media_anterior <= ema_media_anterior and linha_media_atual > ema_media_atual:
+            cruzamento_semanal = 'COMPRA'
+            barra_cruz_semanal = i
+            break
+        
+        # Cruzamento para BAIXO (VENDA)
+        if linha_media_anterior >= ema_media_anterior and linha_media_atual < ema_media_atual:
+            cruzamento_semanal = 'VENDA'
+            barra_cruz_semanal = i
+            break
+    
+    # Verificar convergência de cruzamentos
+    convergente = False
+    direcao = None
+    tipo_sinal = None
+    
+    if cruzamento_diario and cruzamento_semanal:
+        if cruzamento_diario == cruzamento_semanal:
+            convergente = True
+            direcao = cruzamento_diario
+            
+            # Determinar tipo de sinal
+            if barra_cruz_diario == 1 and barra_cruz_semanal == 1:
+                tipo_sinal = 'CRUZAMENTO_SIMULTÂNEO'
+            elif barra_cruz_diario == 1:
+                tipo_sinal = 'REENTRADA_DIÁRIO'
+            elif barra_cruz_semanal == 1:
+                tipo_sinal = 'REENTRADA_SEMANAL'
+            else:
+                tipo_sinal = 'CRUZAMENTO_RECENTE'
     
     return {
         'convergente': convergente,
         'direcao': direcao,
-        'sinal_diario': sinal_diario,
-        'sinal_semanal': sinal_semanal
+        'tipo_sinal': tipo_sinal,
+        'barra_cruzamento_diario': barra_cruz_diario,
+        'barra_cruzamento_semanal': barra_cruz_semanal,
+        'cruzamento_diario': cruzamento_diario,
+        'cruzamento_semanal': cruzamento_semanal
     }
 
 
