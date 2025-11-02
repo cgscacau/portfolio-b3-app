@@ -26,6 +26,61 @@ from core.portfolio import (
 from core.data import get_price_history, obter_preco_atual
 from core.cache import cache_manager
 
+# ==========================================
+# FUNÇÕES AUXILIARES
+# ==========================================
+
+def calcular_metricas_portfolio(df_precos, pesos):
+    """Calcula métricas de performance do portfólio"""
+    if df_precos.empty:
+        return None
+    
+    # Retornos
+    df_retornos = df_precos.pct_change().dropna()
+    
+    # Retorno do portfólio
+    retorno_portfolio = (df_retornos * pesos).sum(axis=1)
+    
+    # Métricas
+    retorno_acumulado = (1 + retorno_portfolio).cumprod()
+    retorno_total = (retorno_acumulado.iloc[-1] - 1) * 100
+    
+    # Anualizar
+    dias = len(retorno_portfolio)
+    anos = dias / 252
+    retorno_anual = ((1 + retorno_total/100) ** (1/anos) - 1) * 100 if anos > 0 else 0
+    
+    volatilidade = retorno_portfolio.std() * (252 ** 0.5) * 100
+    sharpe = (retorno_anual / volatilidade) if volatilidade > 0 else 0
+    
+    # Drawdown
+    cumulative = retorno_acumulado
+    running_max = cumulative.expanding().max()
+    drawdown = (cumulative - running_max) / running_max * 100
+    max_drawdown = drawdown.min()
+    
+    return {
+        'retorno_total': retorno_total,
+        'retorno_anual': retorno_anual,
+        'volatilidade': volatilidade,
+        'sharpe': sharpe,
+        'max_drawdown': max_drawdown,
+        'retorno_acumulado': retorno_acumulado,
+        'drawdown': drawdown
+    }
+
+
+# ==========================================
+# CONFIGURAÇÃO DA PÁGINA
+# ==========================================
+
+st.set_page_config(
+    page_title="Gestão de Portfólios",
+    page_icon="📁",
+    layout="wide"
+)
+
+
 
 # ==========================================
 # CONFIGURAÇÃO DA PÁGINA
