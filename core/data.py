@@ -1,6 +1,6 @@
 """
-Módulo de gerenciamento de dados usando requisições HTTP diretas
-Contorna problemas do yfinance com User-Agent
+Módulo de gerenciamento de dados com cache otimizado
+Usa requisições HTTP diretas com cache nativo do Streamlit
 """
 
 import requests
@@ -9,27 +9,60 @@ from datetime import datetime, timedelta
 import time
 import logging
 from typing import Optional, Dict, Any, List
-import json
+import streamlit as st
+
+# Importar sistema de cache
+from .cache import (
+    cache_historical_data,
+    cache_current_price,
+    cache_dividends,
+    cache_asset_info,
+    cache_resource,
+    cache_manager
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+# ==========================================
+# SESSÃO HTTP CACHEADA
+# ==========================================
+
+@cache_resource
+def get_http_session() -> requests.Session:
+    """
+    Cria e cacheia sessão HTTP
+    Reutiliza conexões para melhor performance
+    """
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+        'Accept-Language': 'en-US,en;q=0.9',
+    })
+    logger.info("Nova sessão HTTP criada e cacheada")
+    return session
+
+
+# ==========================================
+# DATA MANAGER
+# ==========================================
+
 class DataManager:
-    """Gerenciador de dados com requisições HTTP diretas"""
+    """Gerenciador de dados com cache otimizado"""
     
     def __init__(self):
         """Inicializa o gerenciador"""
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'application/json',
-            'Accept-Language': 'en-US,en;q=0.9',
-        })
         self.base_url = "https://query1.finance.yahoo.com"
         self.max_retries = 3
         self.timeout = 30
-        logger.info("DataManager inicializado com requisições HTTP diretas")
+        logger.info("DataManager inicializado com cache otimizado")
+    
+    @property
+    def session(self) -> requests.Session:
+        """Retorna sessão HTTP cacheada"""
+        return get_http_session()
     
     # ==========================================
     # NORMALIZAÇÃO
@@ -43,10 +76,11 @@ class DataManager:
         return ticker
     
     # ==========================================
-    # REQUISIÇÃO DIRETA AO YAHOO
+    # REQUISIÇÃO DIRETA (COM CACHE)
     # ==========================================
     
-    def _fetch_yahoo_data(
+    @cache_historical_data
+    def _fetch_yahoo_data_cached(
         self,
         ticker: str,
         start_timestamp: int,
@@ -54,7 +88,34 @@ class DataManager:
         interval: str = '1d'
     ) -> Optional[pd.DataFrame]:
         """
-        Faz requisição HTTP direta ao Yahoo Finance
+        Versão CACHEADA de fetch_yahoo_data
+        Cache: 24 horas
+        
+        Args:
+            ticker: Código do ativo
+            start_timestamp: Timestamp de início
+            end_timestamp: Timestamp de fim
+            interval: Intervalo (1d, 1wk, 1mo)
+            
+        Returns:
+            DataFrame com dados ou None
+        """
+        cache_manager.stats.registrar_request()
+        logger.info(f"  🔍 Buscando dados (pode usar cache): {ticker}")
+        
+        return self._fetch_yahoo_data_no_cache(
+            ticker, start_timestamp, end_timestamp, interval
+        )
+    
+    def _fetch_yahoo_data_no_cache(
+        self,
+        ticker: str,
+        start_timestamp: int,
+        end_timestamp: int,
+        interval: str = '1d'
+    ) -> Optional[pd.DataFrame]:
+        """
+        Versão SEM CACHE - faz requisição real
         
         Args:
             ticker: Código do ativo
@@ -79,7 +140,7 @@ class DataManager:
         
         for tentativa in range(self.max_retries):
             try:
-                logger.info(f"  Tentativa {tentativa + 1}: requisição HTTP para {ticker_normalizado}")
+                logger.info(f"    → Requisição HTTP tentativa {tentativa + 1}")
                 
                 response = self.session.get(
                     url,
@@ -87,13 +148,14 @@ class DataManager:
                     timeout=self.timeout
                 )
                 
-                logger.info(f"    Status: {response.status_code}")
+                logger.info(f"    ← Status: {response.status_code}")
                 
                 if response.status_code != 200:
                     if tentativa < self.max_retries - 1:
                         time.sleep(2 ** tentativa)
                         continue
                     logger.error(f"    ✗ Status code: {response.status_code}")
+                    cache_manager.stats.registrar_miss()
                     return None
                 
                 data = response.json()
@@ -101,10 +163,12 @@ class DataManager:
                 # Verificar estrutura da resposta
                 if 'chart' not in data:
                     logger.warning(f"    ⚠ Resposta sem 'chart'")
+                    cache_manager.stats.registrar_miss()
                     return None
                 
                 if 'result' not in data['chart'] or not data['chart']['result']:
                     logger.warning(f"    ⚠ Resposta sem 'result'")
+                    cache_manager.stats.registrar_miss()
                     return None
                 
                 result = data['chart']['result'][0]
@@ -113,6 +177,7 @@ class DataManager:
                 timestamps = result.get('timestamp', [])
                 if not timestamps:
                     logger.warning(f"    ⚠ Sem timestamps")
+                    cache_manager.stats.registrar_miss()
                     return None
                 
                 # Extrair indicadores
@@ -136,9 +201,11 @@ class DataManager:
                 
                 if not df.empty:
                     logger.info(f"    ✓ {len(df)} registros obtidos")
+                    cache_manager.stats.registrar_hit()
                     return df
                 else:
                     logger.warning(f"    ⚠ DataFrame vazio após limpeza")
+                    cache_manager.stats.registrar_miss()
                     return None
                 
             except Exception as e:
@@ -147,15 +214,18 @@ class DataManager:
                     time.sleep(2 ** tentativa)
                 continue
         
+        cache_manager.stats.registrar_miss()
         return None
     
     # ==========================================
-    # BUSCA DE PREÇO ATUAL
+    # BUSCA DE PREÇO ATUAL (COM CACHE)
     # ==========================================
     
+    @cache_current_price
     def obter_preco_atual(self, ticker: str) -> Optional[float]:
         """
-        Busca preço atual
+        Busca preço atual (CACHEADO)
+        Cache: 5 minutos
         
         Args:
             ticker: Código do ativo
@@ -163,7 +233,8 @@ class DataManager:
         Returns:
             Preço atual ou None
         """
-        logger.info(f"Buscando preço de {ticker}")
+        logger.info(f"💰 Buscando preço de {ticker} (cache 5min)")
+        cache_manager.stats.registrar_request()
         
         # Buscar últimos 5 dias
         end = datetime.now()
@@ -172,18 +243,20 @@ class DataManager:
         end_ts = int(end.timestamp())
         start_ts = int(start.timestamp())
         
-        df = self._fetch_yahoo_data(ticker, start_ts, end_ts)
+        df = self._fetch_yahoo_data_no_cache(ticker, start_ts, end_ts)
         
         if df is not None and not df.empty:
             preco = float(df['Close'].iloc[-1])
             logger.info(f"✓ {ticker}: R$ {preco:.2f}")
+            cache_manager.stats.registrar_hit()
             return preco
         
         logger.error(f"✗ Não foi possível obter preço de {ticker}")
+        cache_manager.stats.registrar_miss()
         return None
     
     # ==========================================
-    # BUSCA DE HISTÓRICO
+    # BUSCA DE HISTÓRICO (COM CACHE)
     # ==========================================
     
     def get_price_history(
@@ -194,19 +267,20 @@ class DataManager:
         use_cache: bool = True
     ) -> pd.DataFrame:
         """
-        Busca histórico de preços
+        Busca histórico de preços (CACHEADO)
+        Cache: 24 horas por ticker
         
         Args:
             tickers: Lista de códigos
             start_date: Data inicial
             end_date: Data final
-            use_cache: Ignorado
+            use_cache: Se True usa cache, se False força nova busca
             
         Returns:
             DataFrame com histórico
         """
         logger.info("=" * 60)
-        logger.info(f"BUSCA DE HISTÓRICO (HTTP DIRETO)")
+        logger.info(f"📊 BUSCA DE HISTÓRICO (Cache: {'ON' if use_cache else 'OFF'})")
         logger.info(f"Ativos: {len(tickers)}")
         logger.info(f"Período: {start_date.date()} até {end_date.date()}")
         logger.info("=" * 60)
@@ -232,12 +306,16 @@ class DataManager:
         
         for i in range(0, len(tickers), batch_size):
             batch = tickers[i:i + batch_size]
-            logger.info(f"\nLote {i//batch_size + 1}/{(len(tickers)-1)//batch_size + 1}")
+            logger.info(f"\n📦 Lote {i//batch_size + 1}/{(len(tickers)-1)//batch_size + 1}")
             
             for idx, ticker in enumerate(batch, 1):
                 logger.info(f"[{i+idx}/{len(tickers)}] {ticker}")
                 
-                df = self._fetch_yahoo_data(ticker, start_ts, end_ts)
+                # Usar versão cacheada ou não
+                if use_cache:
+                    df = self._fetch_yahoo_data_cached(ticker, start_ts, end_ts)
+                else:
+                    df = self._fetch_yahoo_data_no_cache(ticker, start_ts, end_ts)
                 
                 if df is not None and not df.empty:
                     all_data[ticker] = df['Close']
@@ -245,16 +323,16 @@ class DataManager:
                 else:
                     falhas += 1
                 
-                # Delay entre requisições
-                time.sleep(0.5)
+                # Delay entre requisições (menor se usar cache)
+                time.sleep(0.2 if use_cache else 0.5)
             
             # Delay entre lotes
             if i + batch_size < len(tickers):
-                logger.info("Aguardando antes do próximo lote...")
-                time.sleep(2)
+                logger.info("⏳ Aguardando antes do próximo lote...")
+                time.sleep(1 if use_cache else 2)
         
         logger.info(f"\n{'='*60}")
-        logger.info(f"RESUMO: {sucessos} sucessos, {falhas} falhas")
+        logger.info(f"✅ RESUMO: {sucessos} sucessos, {falhas} falhas")
         logger.info(f"{'='*60}")
         
         if all_data:
@@ -277,9 +355,10 @@ class DataManager:
         return pd.DataFrame()
     
     # ==========================================
-    # BUSCA DE DIVIDENDOS
+    # BUSCA DE DIVIDENDOS (COM CACHE)
     # ==========================================
     
+    @cache_dividends
     def get_dividends(
         self,
         ticker: str,
@@ -287,7 +366,8 @@ class DataManager:
         end_date: Optional[datetime] = None
     ) -> pd.DataFrame:
         """
-        Busca dividendos via requisição HTTP
+        Busca dividendos (CACHEADO)
+        Cache: 12 horas
         
         Args:
             ticker: Código do ativo
@@ -304,7 +384,8 @@ class DataManager:
             end_date = datetime.now()
         
         ticker_normalizado = self._normalize_ticker(ticker)
-        logger.info(f"Buscando dividendos de {ticker_normalizado}")
+        logger.info(f"💵 Buscando dividendos de {ticker_normalizado} (cache 12h)")
+        cache_manager.stats.registrar_request()
         
         start_ts = int(start_date.timestamp())
         end_ts = int(end_date.timestamp())
@@ -341,35 +422,47 @@ class DataManager:
                         df = df.sort_values('data').reset_index(drop=True)
                         
                         logger.info(f"✓ {ticker}: {len(df)} dividendos")
+                        cache_manager.stats.registrar_hit()
                         return df
         
         except Exception as e:
             logger.error(f"✗ Erro ao buscar dividendos: {str(e)}")
         
         logger.warning(f"⚠ {ticker}: sem dividendos")
+        cache_manager.stats.registrar_miss()
         return pd.DataFrame(columns=['data', 'valor'])
     
     # ==========================================
-    # BUSCA EM LOTE
+    # BUSCA EM LOTE (COM CACHE)
     # ==========================================
     
     def get_current_prices(self, tickers: List[str]) -> Dict[str, Optional[float]]:
-        """Busca preços de múltiplos ativos"""
-        logger.info(f"Buscando preços de {len(tickers)} ativos")
+        """
+        Busca preços de múltiplos ativos (CACHEADO)
+        Cache: 5 minutos por ticker
+        """
+        logger.info(f"💰 Buscando preços de {len(tickers)} ativos (cache 5min)")
         
         precos = {}
         for ticker in tickers:
             precos[ticker] = self.obter_preco_atual(ticker)
-            time.sleep(0.5)
+            time.sleep(0.2)  # Delay reduzido com cache
         
         return precos
     
     # ==========================================
-    # INFORMAÇÕES
+    # INFORMAÇÕES (COM CACHE)
     # ==========================================
     
+    @cache_asset_info
     def obter_informacoes_ativo(self, ticker: str) -> Dict[str, Any]:
-        """Busca informações do ativo"""
+        """
+        Busca informações do ativo (CACHEADO)
+        Cache: 7 dias
+        """
+        logger.info(f"ℹ️ Buscando info de {ticker} (cache 7d)")
+        cache_manager.stats.registrar_request()
+        
         info = {
             'ticker': ticker,
             'nome': ticker,
@@ -378,6 +471,7 @@ class DataManager:
         }
         
         info['preco'] = self.obter_preco_atual(ticker)
+        cache_manager.stats.registrar_hit()
         
         return info
     
@@ -387,7 +481,7 @@ class DataManager:
     
     def testar_conexao(self) -> Dict[str, bool]:
         """Testa conexão"""
-        logger.info("Testando conexão HTTP...")
+        logger.info("🔌 Testando conexão HTTP...")
         
         resultado = {'yahoo_finance': False}
         
@@ -395,7 +489,11 @@ class DataManager:
             end = datetime.now()
             start = end - timedelta(days=5)
             
-            df = self._fetch_yahoo_data('PETR4', int(start.timestamp()), int(end.timestamp()))
+            df = self._fetch_yahoo_data_no_cache(
+                'PETR4',
+                int(start.timestamp()),
+                int(end.timestamp())
+            )
             
             if df is not None and not df.empty:
                 resultado['yahoo_finance'] = True
@@ -425,7 +523,7 @@ def get_price_history(
     end_date: datetime,
     use_cache: bool = True
 ) -> pd.DataFrame:
-    """Busca histórico"""
+    """Busca histórico (com cache)"""
     return _data_manager.get_price_history(tickers, start_date, end_date, use_cache)
 
 
@@ -434,22 +532,22 @@ def get_dividends(
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None
 ) -> pd.DataFrame:
-    """Busca dividendos"""
+    """Busca dividendos (com cache)"""
     return _data_manager.get_dividends(ticker, start_date, end_date)
 
 
 def get_current_prices(tickers: List[str]) -> Dict[str, Optional[float]]:
-    """Busca preços"""
+    """Busca preços (com cache)"""
     return _data_manager.get_current_prices(tickers)
 
 
 def obter_preco_atual(ticker: str) -> Optional[float]:
-    """Busca preço"""
+    """Busca preço (com cache)"""
     return _data_manager.obter_preco_atual(ticker)
 
 
 def obter_informacoes_ativo(ticker: str) -> Dict[str, Any]:
-    """Busca info"""
+    """Busca info (com cache)"""
     return _data_manager.obter_informacoes_ativo(ticker)
 
 
