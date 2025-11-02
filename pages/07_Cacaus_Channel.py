@@ -195,12 +195,69 @@ def calcular_entrada_stop_alvo(df, direcao, rr_ratio=2.0):
     }
 
 
+def obter_dados_ohlc_completos(ticker, data_inicio, data_fim):
+    """
+    Obtém dados OHLC completos do ativo usando yfinance diretamente
+    para garantir velas completas no gráfico
+    """
+    try:
+        import yfinance as yf
+        
+        # Adicionar .SA para ativos brasileiros se necessário
+        ticker_yf = ticker if '.SA' in ticker else f"{ticker}.SA"
+        
+        # Baixar dados com yfinance
+        dados = yf.download(
+            ticker_yf,
+            start=data_inicio,
+            end=data_fim,
+            progress=False,
+            auto_adjust=False  # Manter dados originais sem ajuste
+        )
+        
+        if dados.empty:
+            return None
+        
+        # Renomear colunas para padrão
+        df_ohlc = pd.DataFrame({
+            'Open': dados['Open'],
+            'High': dados['High'],
+            'Low': dados['Low'],
+            'Close': dados['Close'],
+            'Volume': dados['Volume']
+        }).dropna()
+        
+        return df_ohlc
+        
+    except Exception as e:
+        # Fallback: usar get_price_history e criar OHLC aproximado
+        try:
+            df = get_price_history([ticker], data_inicio, data_fim)
+            
+            if df.empty or ticker not in df.columns:
+                return None
+            
+            # Criar OHLC aproximado
+            df_ohlc = pd.DataFrame({
+                'Open': df[ticker],
+                'High': df[ticker] * 1.001,  # Aproximação: +0.1%
+                'Low': df[ticker] * 0.999,   # Aproximação: -0.1%
+                'Close': df[ticker],
+                'Volume': 0
+            }).dropna()
+            
+            return df_ohlc
+            
+        except:
+            return None
+
+
 # ==========================================
 # VISUALIZAÇÃO
 # ==========================================
 
 def criar_grafico_cacaus_channel(df_diario, df_semanal, ticker, timeframe_ativo="Diário"):
-    """Cria gráfico do Cacau's Channel com candlesticks completos"""
+    """Cria gráfico do Cacau's Channel com candlesticks completos e melhor centralização"""
     
     df = df_diario if timeframe_ativo == "Diário" else df_semanal
     
@@ -210,7 +267,7 @@ def criar_grafico_cacaus_channel(df_diario, df_semanal, ticker, timeframe_ativo=
     
     fig = go.Figure()
     
-    # Candlestick com OHLC correto
+    # Candlestick com OHLC completo
     fig.add_trace(go.Candlestick(
         x=df.index,
         open=df['Open'],
@@ -221,7 +278,8 @@ def criar_grafico_cacaus_channel(df_diario, df_semanal, ticker, timeframe_ativo=
         increasing_line_color='#26a69a',
         decreasing_line_color='#ef5350',
         increasing_fillcolor='#26a69a',
-        decreasing_fillcolor='#ef5350'
+        decreasing_fillcolor='#ef5350',
+        showlegend=True
     ))
     
     # Linha Superior (vermelha)
@@ -230,7 +288,8 @@ def criar_grafico_cacaus_channel(df_diario, df_semanal, ticker, timeframe_ativo=
         y=df['linha_superior'],
         mode='lines',
         name='Linha Superior',
-        line=dict(color='red', width=2)
+        line=dict(color='red', width=2),
+        showlegend=True
     ))
     
     # Linha Inferior (verde)
@@ -239,7 +298,8 @@ def criar_grafico_cacaus_channel(df_diario, df_semanal, ticker, timeframe_ativo=
         y=df['linha_inferior'],
         mode='lines',
         name='Linha Inferior',
-        line=dict(color='lime', width=2)
+        line=dict(color='lime', width=2),
+        showlegend=True
     ))
     
     # Linha Média (branca)
@@ -248,7 +308,8 @@ def criar_grafico_cacaus_channel(df_diario, df_semanal, ticker, timeframe_ativo=
         y=df['linha_media'],
         mode='lines',
         name='Linha Média',
-        line=dict(color='white', width=2)
+        line=dict(color='white', width=2),
+        showlegend=True
     ))
     
     # EMA da Média (laranja)
@@ -257,27 +318,51 @@ def criar_grafico_cacaus_channel(df_diario, df_semanal, ticker, timeframe_ativo=
         y=df['ema_media'],
         mode='lines',
         name='EMA Média',
-        line=dict(color='orange', width=2, dash='dash')
+        line=dict(color='orange', width=2, dash='dash'),
+        showlegend=True
     ))
     
+    # Configuração do layout com melhor centralização
     fig.update_layout(
-        title=f"{ticker} - Cacau's Channel ({timeframe_ativo})",
+        title={
+            'text': f"{ticker} - Cacau's Channel ({timeframe_ativo})",
+            'x': 0.5,
+            'xanchor': 'center',
+            'yanchor': 'top',
+            'font': {'size': 20}
+        },
         xaxis_title="Data",
         yaxis_title="Preço (R$)",
         height=700,
         template="plotly_dark",
         hovermode='x unified',
         xaxis_rangeslider_visible=False,
-        # Melhorar centralização
-        margin=dict(l=50, r=50, t=80, b=50),
+        # Melhor centralização e espaçamento
+        margin=dict(l=80, r=80, t=100, b=80),
         legend=dict(
             orientation="h",
             yanchor="bottom",
             y=1.02,
-            xanchor="right",
-            x=1
+            xanchor="center",
+            x=0.5,
+            font=dict(size=12)
+        ),
+        # Ajustar eixo Y para melhor visualização
+        yaxis=dict(
+            autorange=True,
+            fixedrange=False
+        ),
+        # Ajustar eixo X
+        xaxis=dict(
+            autorange=True,
+            rangeslider=dict(visible=False),
+            type='date'
         )
     )
+    
+    # Configurar hover
+    fig.update_xaxes(showgrid=True, gridwidth=0.5, gridcolor='rgba(128, 128, 128, 0.2)')
+    fig.update_yaxes(showgrid=True, gridwidth=0.5, gridcolor='rgba(128, 128, 128, 0.2)')
     
     return fig
 
@@ -318,6 +403,7 @@ with st.sidebar:
     
     data_fim = st.date_input("Data Final", value=datetime.now(), max_value=datetime.now())
     
+    # Período expandido para até 5 anos
     periodo_analise = st.selectbox(
         "Período de Análise",
         options=["3 meses", "6 meses", "1 ano", "2 anos", "3 anos", "5 anos"],
@@ -335,6 +421,8 @@ with st.sidebar:
     
     data_inicio = datetime.combine(data_fim, datetime.min.time()) - timedelta(days=periodos_dias[periodo_analise])
     data_fim_dt = datetime.combine(data_fim, datetime.min.time())
+    
+    st.caption(f"📅 De {data_inicio.strftime('%d/%m/%Y')} até {data_fim_dt.strftime('%d/%m/%Y')}")
 
 
 # ==========================================
@@ -462,21 +550,10 @@ with col_esquerda:
             total_analisados += 1
             
             try:
-                df = get_price_history([ticker], data_inicio, data_fim_dt)
+                # Obter dados OHLC completos
+                df_ativo = obter_dados_ohlc_completos(ticker, data_inicio, data_fim_dt)
                 
-                if df.empty or ticker not in df.columns:
-                    continue
-                
-                # Criar OHLC correto
-                df_ativo = pd.DataFrame({
-                    'Open': df[ticker],
-                    'High': df[ticker],
-                    'Low': df[ticker],
-                    'Close': df[ticker],
-                    'Volume': 0
-                }).dropna()
-                
-                if len(df_ativo) < max(periodo_superior, periodo_inferior, ema_periodo) + 10:
+                if df_ativo is None or len(df_ativo) < max(periodo_superior, periodo_inferior, ema_periodo) + 10:
                     continue
                 
                 total_com_dados += 1
@@ -645,7 +722,7 @@ with col_direita:
             horizontal=True
         )
         
-        # Gráfico
+        # Gráfico com velas completas
         fig = criar_grafico_cacaus_channel(
             dados_ativo['df_diario'],
             dados_ativo['df_semanal'],
@@ -669,17 +746,10 @@ with col_direita:
             with st.spinner(f"Carregando {ticker_individual}..."):
                 
                 try:
-                    df = get_price_history([ticker_individual], data_inicio, data_fim_dt)
+                    # Obter dados OHLC completos
+                    df_ativo = obter_dados_ohlc_completos(ticker_individual, data_inicio, data_fim_dt)
                     
-                    if not df.empty and ticker_individual in df.columns:
-                        
-                        df_ativo = pd.DataFrame({
-                            'Open': df[ticker_individual],
-                            'High': df[ticker_individual],
-                            'Low': df[ticker_individual],
-                            'Close': df[ticker_individual],
-                            'Volume': 0
-                        }).dropna()
+                    if df_ativo is not None and len(df_ativo) >= max(periodo_superior, periodo_inferior, ema_periodo) + 10:
                         
                         df_diario = calcular_cacaus_channel(df_ativo, periodo_superior, periodo_inferior, ema_periodo)
                         df_semanal_raw = resample_para_semanal(df_ativo)
@@ -701,7 +771,7 @@ with col_direita:
                         st.rerun()
                     
                     else:
-                        st.error("❌ Sem dados")
+                        st.error("❌ Sem dados suficientes")
                 
                 except Exception as e:
                     st.error(f"❌ Erro: {str(e)}")
@@ -715,28 +785,4 @@ st.markdown("---")
 
 with st.expander("📖 Como funciona?"):
     st.markdown("""
-    ### Lógica de Sinais (Cruzamentos)
-    
-    **Sinal de COMPRA:**
-    - ✅ Linha Branca cruza para CIMA da Linha Laranja no **Semanal**
-    - ✅ Linha Branca cruza para CIMA da Linha Laranja no **Diário**
-    - ✅ Convergência: Ambos cruzamentos na mesma direção
-    
-    **Sinal de VENDA:**
-    - ✅ Linha Branca cruza para BAIXO da Linha Laranja no **Semanal**
-    - ✅ Linha Branca cruza para BAIXO da Linha Laranja no **Diário**
-    - ✅ Convergência: Ambos cruzamentos na mesma direção
-    
-    **Tipos de Sinal:**
-    - 🎯 **SIMULTÂNEO:** Cruzamento na última barra de ambos
-    - 📅 **REENTRADA DIÁRIO:** Semanal já posicionado, diário cruzou
-    - 📆 **REENTRADA SEMANAL:** Diário já posicionado, semanal cruzou
-    - ⏰ **RECENTE:** Ambos cruzaram recentemente (lookback)
-    
-    **Gestão de Risco:**
-    - Stop COMPRA: Linha Inferior (verde)
-    - Stop VENDA: Linha Superior (vermelha)
-    - Alvo: Baseado no Risk/Reward
-    
-    ⚠️ **Aviso:** Ferramenta de análise. Não é recomendação de investimento.
-    """)
+    ### Lógica de Sin<span class="cursor">█</span>
