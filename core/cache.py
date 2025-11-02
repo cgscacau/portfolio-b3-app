@@ -215,7 +215,6 @@ class CacheStats:
         logger.info("Estatísticas de cache resetadas")
 
 
-
 # ==========================================
 # GERENCIADOR DE CACHE
 # ==========================================
@@ -236,7 +235,6 @@ class CacheManager:
         if tipo == 'all':
             limpar_cache_completo()
         elif tipo == 'historical':
-            # Limpar apenas dados históricos (não há API específica, limpa tudo)
             limpar_cache_dados()
         elif tipo == 'prices':
             limpar_cache_dados()
@@ -258,7 +256,11 @@ class CacheManager:
                 'current_price_ttl': f"{CacheConfig.CURRENT_PRICE_TTL / 60:.1f}min",
                 'dividends_ttl': f"{CacheConfig.DIVIDENDS_TTL / 3600:.1f}h",
                 'asset_info_ttl': f"{CacheConfig.ASSET_INFO_TTL / (24 * 3600):.1f}d"
-            }
+            },
+            # Campos para compatibilidade com código antigo
+            'entries': self.stats.obter_estatisticas()['data_requests'],
+            'oldest': self.stats.obter_estatisticas().get('last_clear', None),
+            'newest': datetime.now()
         }
     
     def exibir_painel_controle(self):
@@ -323,5 +325,20 @@ def limpar_cache():
 
 
 def info_cache():
-    """Mantém compatibilidade"""
-    return cache_manager.obter_info()
+    """
+    Retorna informações sobre o cache atual
+    Mantém compatibilidade total com código antigo
+    
+    Returns:
+        Dict com estatísticas do cache
+    """
+    info = cache_manager.obter_info()
+    
+    # Retornar no formato esperado pelo código antigo
+    return {
+        'entries': info['entries'],
+        'oldest': info['oldest'],
+        'newest': info['newest'],
+        'stats': info['stats'],
+        'config': info['config']
+    }
