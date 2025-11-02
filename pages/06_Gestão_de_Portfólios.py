@@ -57,7 +57,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "📝 Criar/Editar",
     "💾 Meus Portfólios",
     "⚖️ Comparar",
-    "📊 Análise Detalhada"
+    "📊 Análise Detalhada",
     "🎯 Otimizado vs Manual"  # NOVA ABA
 ])
 
