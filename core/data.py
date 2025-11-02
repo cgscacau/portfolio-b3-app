@@ -1,147 +1,145 @@
 """
-Módulo principal de gerenciamento de dados
-Corrigido para funcionar com rate limiting do Yahoo Finance
+Módulo de gerenciamento de dados usando requisições HTTP diretas
+Contorna problemas do yfinance com User-Agent
 """
 
-import yfinance as yf
+import requests
 import pandas as pd
 from datetime import datetime, timedelta
 import time
 import logging
 from typing import Optional, Dict, Any, List
-import requests
+import json
 
-# Configurar logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ==========================================
-# CONFIGURAÇÃO GLOBAL DO YFINANCE
-# ==========================================
-
-# Força User-Agent para evitar erro 429
-yf.utils.user_agent_headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-}
-
 
 class DataManager:
-    """Gerenciador de dados de ativos financeiros"""
+    """Gerenciador de dados com requisições HTTP diretas"""
     
     def __init__(self):
         """Inicializa o gerenciador"""
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json',
+            'Accept-Language': 'en-US,en;q=0.9',
+        })
+        self.base_url = "https://query1.finance.yahoo.com"
         self.max_retries = 3
-        self.delay_between_requests = 0.5
-        logger.info("DataManager inicializado com User-Agent configurado")
+        self.timeout = 30
+        logger.info("DataManager inicializado com requisições HTTP diretas")
     
     # ==========================================
     # NORMALIZAÇÃO
     # ==========================================
     
     def _normalize_ticker(self, ticker: str) -> str:
-        """Normaliza ticker para formato Yahoo Finance"""
+        """Normaliza ticker"""
         ticker = str(ticker).upper().strip()
         if not ticker.endswith('.SA'):
             ticker = f"{ticker}.SA"
         return ticker
     
     # ==========================================
-    # BUSCA DE PREÇO ATUAL
+    # REQUISIÇÃO DIRETA AO YAHOO
     # ==========================================
     
-    def obter_preco_atual(self, ticker: str) -> Optional[float]:
-        """
-        Busca preço atual do ativo
-        
-        Args:
-            ticker: Código do ativo
-            
-        Returns:
-            Preço atual ou None
-        """
-        ticker_normalizado = self._normalize_ticker(ticker)
-        logger.info(f"Buscando preço de {ticker_normalizado}")
-        
-        for tentativa in range(self.max_retries):
-            try:
-                stock = yf.Ticker(ticker_normalizado)
-                hist = stock.history(period='5d')
-                
-                if not hist.empty and len(hist) > 0:
-                    preco = float(hist['Close'].iloc[-1])
-                    logger.info(f"✓ {ticker}: R$ {preco:.2f}")
-                    return preco
-                
-            except Exception as e:
-                logger.warning(f"Tentativa {tentativa + 1}: {str(e)}")
-                if tentativa < self.max_retries - 1:
-                    time.sleep(2 ** tentativa)
-                continue
-        
-        logger.error(f"✗ Não foi possível obter preço de {ticker}")
-        return None
-    
-    # ==========================================
-    # BUSCA DE HISTÓRICO
-    # ==========================================
-    
-    def _download_single_ticker(
+    def _fetch_yahoo_data(
         self,
         ticker: str,
-        start_date: datetime,
-        end_date: datetime
-    ) -> Optional[pd.Series]:
+        start_timestamp: int,
+        end_timestamp: int,
+        interval: str = '1d'
+    ) -> Optional[pd.DataFrame]:
         """
-        Baixa histórico de um único ticker
+        Faz requisição HTTP direta ao Yahoo Finance
         
         Args:
             ticker: Código do ativo
-            start_date: Data inicial
-            end_date: Data final
+            start_timestamp: Timestamp de início
+            end_timestamp: Timestamp de fim
+            interval: Intervalo (1d, 1wk, 1mo)
             
         Returns:
-            Series com preços ou None
+            DataFrame com dados ou None
         """
         ticker_normalizado = self._normalize_ticker(ticker)
         
+        url = f"{self.base_url}/v8/finance/chart/{ticker_normalizado}"
+        
+        params = {
+            'period1': start_timestamp,
+            'period2': end_timestamp,
+            'interval': interval,
+            'events': 'history',
+            'includeAdjustedClose': 'true'
+        }
+        
         for tentativa in range(self.max_retries):
             try:
-                logger.info(f"  Tentativa {tentativa + 1}: {ticker_normalizado}")
+                logger.info(f"  Tentativa {tentativa + 1}: requisição HTTP para {ticker_normalizado}")
                 
-                # Usar yf.download com sessão configurada
-                data = yf.download(
-                    ticker_normalizado,
-                    start=start_date.strftime('%Y-%m-%d'),
-                    end=(end_date + timedelta(days=1)).strftime('%Y-%m-%d'),
-                    progress=False,
-                    show_errors=False,
-                    threads=False  # Importante: desabilitar threads
+                response = self.session.get(
+                    url,
+                    params=params,
+                    timeout=self.timeout
                 )
                 
-                if data.empty:
-                    logger.warning(f"    ⚠ Dados vazios")
+                logger.info(f"    Status: {response.status_code}")
+                
+                if response.status_code != 200:
                     if tentativa < self.max_retries - 1:
-                        time.sleep(2)
+                        time.sleep(2 ** tentativa)
                         continue
+                    logger.error(f"    ✗ Status code: {response.status_code}")
                     return None
                 
-                # Extrair Close
-                if 'Close' in data.columns:
-                    series = data['Close']
-                elif isinstance(data.columns, pd.MultiIndex):
-                    if ('Close', ticker_normalizado) in data.columns:
-                        series = data[('Close', ticker_normalizado)]
-                    else:
-                        series = data['Close'].iloc[:, 0]
+                data = response.json()
+                
+                # Verificar estrutura da resposta
+                if 'chart' not in data:
+                    logger.warning(f"    ⚠ Resposta sem 'chart'")
+                    return None
+                
+                if 'result' not in data['chart'] or not data['chart']['result']:
+                    logger.warning(f"    ⚠ Resposta sem 'result'")
+                    return None
+                
+                result = data['chart']['result'][0]
+                
+                # Extrair timestamps
+                timestamps = result.get('timestamp', [])
+                if not timestamps:
+                    logger.warning(f"    ⚠ Sem timestamps")
+                    return None
+                
+                # Extrair indicadores
+                indicators = result.get('indicators', {})
+                quote = indicators.get('quote', [{}])[0]
+                adjclose = indicators.get('adjclose', [{}])[0]
+                
+                # Criar DataFrame
+                df = pd.DataFrame({
+                    'Date': pd.to_datetime(timestamps, unit='s'),
+                    'Open': quote.get('open', []),
+                    'High': quote.get('high', []),
+                    'Low': quote.get('low', []),
+                    'Close': quote.get('close', []),
+                    'Volume': quote.get('volume', []),
+                    'Adj Close': adjclose.get('adjclose', quote.get('close', []))
+                })
+                
+                df = df.set_index('Date')
+                df = df.dropna(subset=['Close'])
+                
+                if not df.empty:
+                    logger.info(f"    ✓ {len(df)} registros obtidos")
+                    return df
                 else:
-                    logger.warning(f"    ⚠ Estrutura inesperada")
+                    logger.warning(f"    ⚠ DataFrame vazio após limpeza")
                     return None
-                
-                series = series.dropna()
-                
-                if len(series) > 0:
-                    logger.info(f"    ✓ {len(series)} registros")
-                    return series
                 
             except Exception as e:
                 logger.error(f"    ✗ Erro: {str(e)}")
@@ -151,6 +149,43 @@ class DataManager:
         
         return None
     
+    # ==========================================
+    # BUSCA DE PREÇO ATUAL
+    # ==========================================
+    
+    def obter_preco_atual(self, ticker: str) -> Optional[float]:
+        """
+        Busca preço atual
+        
+        Args:
+            ticker: Código do ativo
+            
+        Returns:
+            Preço atual ou None
+        """
+        logger.info(f"Buscando preço de {ticker}")
+        
+        # Buscar últimos 5 dias
+        end = datetime.now()
+        start = end - timedelta(days=5)
+        
+        end_ts = int(end.timestamp())
+        start_ts = int(start.timestamp())
+        
+        df = self._fetch_yahoo_data(ticker, start_ts, end_ts)
+        
+        if df is not None and not df.empty:
+            preco = float(df['Close'].iloc[-1])
+            logger.info(f"✓ {ticker}: R$ {preco:.2f}")
+            return preco
+        
+        logger.error(f"✗ Não foi possível obter preço de {ticker}")
+        return None
+    
+    # ==========================================
+    # BUSCA DE HISTÓRICO
+    # ==========================================
+    
     def get_price_history(
         self,
         tickers: List[str],
@@ -159,19 +194,19 @@ class DataManager:
         use_cache: bool = True
     ) -> pd.DataFrame:
         """
-        Busca histórico de preços para múltiplos ativos
+        Busca histórico de preços
         
         Args:
             tickers: Lista de códigos
             start_date: Data inicial
             end_date: Data final
-            use_cache: Usar cache (ignorado)
+            use_cache: Ignorado
             
         Returns:
             DataFrame com histórico
         """
         logger.info("=" * 60)
-        logger.info(f"BUSCA DE HISTÓRICO")
+        logger.info(f"BUSCA DE HISTÓRICO (HTTP DIRETO)")
         logger.info(f"Ativos: {len(tickers)}")
         logger.info(f"Período: {start_date.date()} até {end_date.date()}")
         logger.info("=" * 60)
@@ -181,14 +216,18 @@ class DataManager:
             return pd.DataFrame()
         
         if not tickers:
-            logger.error("✗ Lista de tickers vazia")
+            logger.error("✗ Lista vazia")
             return pd.DataFrame()
+        
+        # Converter para timestamps
+        start_ts = int(start_date.timestamp())
+        end_ts = int((end_date + timedelta(days=1)).timestamp())
         
         all_data = {}
         sucessos = 0
         falhas = 0
         
-        # Processar em lotes pequenos
+        # Processar em lotes
         batch_size = 5
         
         for i in range(0, len(tickers), batch_size):
@@ -198,18 +237,18 @@ class DataManager:
             for idx, ticker in enumerate(batch, 1):
                 logger.info(f"[{i+idx}/{len(tickers)}] {ticker}")
                 
-                series = self._download_single_ticker(ticker, start_date, end_date)
+                df = self._fetch_yahoo_data(ticker, start_ts, end_ts)
                 
-                if series is not None and not series.empty:
-                    all_data[ticker] = series
+                if df is not None and not df.empty:
+                    all_data[ticker] = df['Close']
                     sucessos += 1
                 else:
                     falhas += 1
                 
                 # Delay entre requisições
-                time.sleep(self.delay_between_requests)
+                time.sleep(0.5)
             
-            # Delay maior entre lotes
+            # Delay entre lotes
             if i + batch_size < len(tickers):
                 logger.info("Aguardando antes do próximo lote...")
                 time.sleep(2)
@@ -248,7 +287,7 @@ class DataManager:
         end_date: Optional[datetime] = None
     ) -> pd.DataFrame:
         """
-        Busca histórico de dividendos
+        Busca dividendos via requisição HTTP
         
         Args:
             ticker: Código do ativo
@@ -261,34 +300,51 @@ class DataManager:
         if start_date is None:
             start_date = datetime.now() - timedelta(days=730)
         
+        if end_date is None:
+            end_date = datetime.now()
+        
         ticker_normalizado = self._normalize_ticker(ticker)
         logger.info(f"Buscando dividendos de {ticker_normalizado}")
         
-        for tentativa in range(self.max_retries):
-            try:
-                stock = yf.Ticker(ticker_normalizado)
-                dividends = stock.dividends
+        start_ts = int(start_date.timestamp())
+        end_ts = int(end_date.timestamp())
+        
+        url = f"{self.base_url}/v8/finance/chart/{ticker_normalizado}"
+        
+        params = {
+            'period1': start_ts,
+            'period2': end_ts,
+            'interval': '1d',
+            'events': 'div',
+        }
+        
+        try:
+            response = self.session.get(url, params=params, timeout=self.timeout)
+            
+            if response.status_code == 200:
+                data = response.json()
                 
-                if not dividends.empty:
-                    df = pd.DataFrame({
-                        'data': dividends.index,
-                        'valor': dividends.values
-                    })
+                if 'chart' in data and 'result' in data['chart']:
+                    result = data['chart']['result'][0]
+                    events = result.get('events', {})
+                    dividends = events.get('dividends', {})
                     
-                    df = df[df['data'] >= start_date]
-                    if end_date:
-                        df = df[df['data'] <= end_date]
-                    
-                    df = df.reset_index(drop=True)
-                    
-                    logger.info(f"✓ {ticker}: {len(df)} dividendos")
-                    return df
-                
-            except Exception as e:
-                logger.warning(f"Tentativa {tentativa + 1}: {str(e)}")
-                if tentativa < self.max_retries - 1:
-                    time.sleep(2)
-                continue
+                    if dividends:
+                        div_list = []
+                        for timestamp, div_data in dividends.items():
+                            div_list.append({
+                                'data': pd.to_datetime(int(timestamp), unit='s'),
+                                'valor': div_data.get('amount', 0)
+                            })
+                        
+                        df = pd.DataFrame(div_list)
+                        df = df.sort_values('data').reset_index(drop=True)
+                        
+                        logger.info(f"✓ {ticker}: {len(df)} dividendos")
+                        return df
+        
+        except Exception as e:
+            logger.error(f"✗ Erro ao buscar dividendos: {str(e)}")
         
         logger.warning(f"⚠ {ticker}: sem dividendos")
         return pd.DataFrame(columns=['data', 'valor'])
@@ -304,7 +360,7 @@ class DataManager:
         precos = {}
         for ticker in tickers:
             precos[ticker] = self.obter_preco_atual(ticker)
-            time.sleep(self.delay_between_requests)
+            time.sleep(0.5)
         
         return precos
     
@@ -314,8 +370,6 @@ class DataManager:
     
     def obter_informacoes_ativo(self, ticker: str) -> Dict[str, Any]:
         """Busca informações do ativo"""
-        ticker_normalizado = self._normalize_ticker(ticker)
-        
         info = {
             'ticker': ticker,
             'nome': ticker,
@@ -323,25 +377,7 @@ class DataManager:
             'tipo': 'ACAO'
         }
         
-        try:
-            stock = yf.Ticker(ticker_normalizado)
-            stock_info = stock.info
-            
-            if stock_info:
-                info['nome'] = (
-                    stock_info.get('longName') or
-                    stock_info.get('shortName') or
-                    ticker
-                )
-                info['preco'] = (
-                    stock_info.get('currentPrice') or
-                    stock_info.get('regularMarketPrice')
-                )
-        except:
-            pass
-        
-        if not info['preco']:
-            info['preco'] = self.obter_preco_atual(ticker)
+        info['preco'] = self.obter_preco_atual(ticker)
         
         return info
     
@@ -351,21 +387,23 @@ class DataManager:
     
     def testar_conexao(self) -> Dict[str, bool]:
         """Testa conexão"""
-        logger.info("Testando conexão...")
+        logger.info("Testando conexão HTTP...")
         
         resultado = {'yahoo_finance': False}
         
         try:
-            stock = yf.Ticker('PETR4.SA')
-            hist = stock.history(period='5d')
+            end = datetime.now()
+            start = end - timedelta(days=5)
             
-            if not hist.empty:
+            df = self._fetch_yahoo_data('PETR4', int(start.timestamp()), int(end.timestamp()))
+            
+            if df is not None and not df.empty:
                 resultado['yahoo_finance'] = True
-                logger.info("✓ Yahoo Finance: OK")
+                logger.info("✓ Yahoo Finance HTTP: OK")
             else:
-                logger.error("✗ Yahoo Finance: sem dados")
+                logger.error("✗ Yahoo Finance HTTP: sem dados")
         except Exception as e:
-            logger.error(f"✗ Yahoo Finance: {str(e)}")
+            logger.error(f"✗ Yahoo Finance HTTP: {str(e)}")
         
         return resultado
 
@@ -387,7 +425,7 @@ def get_price_history(
     end_date: datetime,
     use_cache: bool = True
 ) -> pd.DataFrame:
-    """Busca histórico de preços"""
+    """Busca histórico"""
     return _data_manager.get_price_history(tickers, start_date, end_date, use_cache)
 
 
@@ -401,17 +439,17 @@ def get_dividends(
 
 
 def get_current_prices(tickers: List[str]) -> Dict[str, Optional[float]]:
-    """Busca preços atuais"""
+    """Busca preços"""
     return _data_manager.get_current_prices(tickers)
 
 
 def obter_preco_atual(ticker: str) -> Optional[float]:
-    """Busca preço atual"""
+    """Busca preço"""
     return _data_manager.obter_preco_atual(ticker)
 
 
 def obter_informacoes_ativo(ticker: str) -> Dict[str, Any]:
-    """Busca informações"""
+    """Busca info"""
     return _data_manager.obter_informacoes_ativo(ticker)
 
 
