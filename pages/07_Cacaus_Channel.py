@@ -193,12 +193,14 @@ def resample_para_semanal(df):
         return pd.DataFrame()
 
 
-def detectar_convergencia_e_sinais(df_diario, df_semanal, lookback=5):
+def detectar_convergencia_e_sinais_melhorada(df_diario, df_semanal, lookback=5):
     """
-    Detecta convergência e sinais separadamente
+    Detecta convergência com lógica mais flexível
     
-    CONVERGÊNCIA: Cruzamentos na mesma direção em ambos timeframes
-    SINAL: Convergência + pelo menos um cruzamento na última barra
+    CONVERGÊNCIA EXPANDIDA:
+    1. Cruzamentos na mesma direção (lógica original)
+    2. Um timeframe posicionado + outro alinhado na mesma direção
+    3. Ambos na mesma tendência atual (mesmo sem cruzamento recente)
     """
     
     def encontrar_cruzamento(df):
@@ -206,7 +208,6 @@ def detectar_convergencia_e_sinais(df_diario, df_semanal, lookback=5):
         if df.empty or len(df) < 2:
             return None, None
         
-        # Garantir que temos as colunas necessárias
         if not all(col in df.columns for col in ['linha_media', 'ema_media']):
             return None, None
             
@@ -228,24 +229,48 @@ def detectar_convergencia_e_sinais(df_diario, df_semanal, lookback=5):
                 if (anterior['linha_media'] >= anterior['ema_media'] and 
                     atual['linha_media'] < atual['ema_media']):
                     return 'VENDA', i
-            except (IndexError, KeyError) as e:
+            except (IndexError, KeyError):
                 continue
         
         return None, None
+    
+    def obter_tendencia_atual(df):
+        """Verifica a tendência atual (última barra)"""
+        if df.empty or len(df) < 1:
+            return None
+        
+        try:
+            ultima = df.iloc[-1]
+            if pd.isna(ultima['linha_media']) or pd.isna(ultima['ema_media']):
+                return None
+            
+            if ultima['linha_media'] > ultima['ema_media']:
+                return 'COMPRA'
+            elif ultima['linha_media'] < ultima['ema_media']:
+                return 'VENDA'
+            else:
+                return None
+        except:
+            return None
     
     # Detectar cruzamentos
     cruz_diario, barras_diario = encontrar_cruzamento(df_diario.dropna())
     cruz_semanal, barras_semanal = encontrar_cruzamento(df_semanal.dropna())
     
-    # CONVERGÊNCIA: mesma direção
-    tem_convergencia = (cruz_diario and cruz_semanal and cruz_diario == cruz_semanal)
+    # Detectar tendências atuais
+    tendencia_diario = obter_tendencia_atual(df_diario.dropna())
+    tendencia_semanal = obter_tendencia_atual(df_semanal.dropna())
     
-    # SINAL: convergência + gatilho na última barra
-    tem_sinal = tem_convergencia and (barras_diario == 1 or barras_semanal == 1)
-    
-    # Classificar tipo
+    # LÓGICA DE CONVERGÊNCIA EXPANDIDA
+    tem_convergencia = False
+    direcao = None
     tipo = None
-    if tem_convergencia:
+    
+    # TIPO 1: Cruzamentos na mesma direção (lógica original)
+    if cruz_diario and cruz_semanal and cruz_diario == cruz_semanal:
+        tem_convergencia = True
+        direcao = cruz_diario
+        
         if barras_diario == 1 and barras_semanal == 1:
             tipo = 'SIMULTÂNEO'
         elif barras_diario == 1:
@@ -255,15 +280,40 @@ def detectar_convergencia_e_sinais(df_diario, df_semanal, lookback=5):
         else:
             tipo = 'CONVERGÊNCIA RECENTE'
     
+    # TIPO 2: Um cruzou + outro está alinhado na mesma direção
+    elif not tem_convergencia:
+        if cruz_semanal and tendencia_diario == cruz_semanal:
+            tem_convergencia = True
+            direcao = cruz_semanal
+            tipo = 'SEMANAL LIDERA'
+            
+        elif cruz_diario and tendencia_semanal == cruz_diario:
+            tem_convergencia = True
+            direcao = cruz_diario
+            tipo = 'DIÁRIO CONFIRMA'
+    
+    # TIPO 3: Ambos na mesma tendência atual (sem cruzamentos recentes)
+    elif not tem_convergencia:
+        if (tendencia_diario and tendencia_semanal and 
+            tendencia_diario == tendencia_semanal):
+            tem_convergencia = True
+            direcao = tendencia_diario
+            tipo = 'TENDÊNCIA ALINHADA'
+    
+    # SINAL: convergência + gatilho na última barra
+    tem_sinal = tem_convergencia and (barras_diario == 1 or barras_semanal == 1)
+    
     return {
         'tem_convergencia': tem_convergencia,
         'tem_sinal': tem_sinal,
-        'direcao': cruz_diario if tem_convergencia else None,
+        'direcao': direcao,
         'tipo': tipo,
         'cruz_diario': cruz_diario,
         'cruz_semanal': cruz_semanal,
         'barras_diario': barras_diario,
-        'barras_semanal': barras_semanal
+        'barras_semanal': barras_semanal,
+        'tendencia_diario': tendencia_diario,
+        'tendencia_semanal': tendencia_semanal
     }
 
 
