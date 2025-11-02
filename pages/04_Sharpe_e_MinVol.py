@@ -1,13 +1,12 @@
 """
-Análise Comparativa: Portfólio de Máximo Sharpe vs Mínima Volatilidade
-Comparação detalhada entre estratégias de otimização
+⚖️ Análise Comparativa: Sharpe Máximo vs Mínima Volatilidade
+Comparação detalhada entre duas estratégias de otimização
 """
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import plotly.express as px
 from datetime import datetime, timedelta
 from scipy.optimize import minimize
 import sys
@@ -17,8 +16,8 @@ from pathlib import Path
 root_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(root_dir))
 
-from core import data
 from core.init import init_all
+from core.cache import salvar_dados_cache, carregar_dados_cache
 
 # Configuração da página
 st.set_page_config(
@@ -27,108 +26,109 @@ st.set_page_config(
     layout="wide"
 )
 
-# Inicializar session state
+# Inicializar
 init_all()
 
 
 # ==========================================
-# FUNÇÕES AUXILIARES DE CÁLCULO
+# CARREGAMENTO DE DADOS COM CACHE
 # ==========================================
 
-def calcular_retornos_diarios(prices):
+def carregar_dados_com_cache(tickers, start_date, end_date):
     """
-    Calcula retornos diários percentuais
+    Carrega dados usando cache global
     
     Args:
-        prices: DataFrame com preços
+        tickers: Lista de tickers
+        start_date: Data inicial
+        end_date: Data final
         
     Returns:
-        DataFrame com retornos
+        DataFrame com preços ou None
     """
+    # Tentar cache
+    price_data, _ = carregar_dados_cache(tickers, start_date, end_date)
+    
+    if price_data is not None and not price_data.empty:
+        st.info("📦 Dados carregados do cache")
+        return price_data
+    
+    # Baixar
+    st.info("📥 Baixando dados do mercado...")
+    
+    from core import data
+    
+    with st.spinner("Carregando preços..."):
+        try:
+            price_data = data.get_price_history(tickers, start_date, end_date)
+            
+            if not price_data.empty:
+                # Salvar cache
+                salvar_dados_cache(tickers, start_date, end_date, price_data, None)
+                st.success(f"✓ {len(price_data)} dias carregados")
+                return price_data
+            
+        except Exception as e:
+            st.error(f"❌ Erro: {str(e)}")
+    
+    return None
+
+
+# ==========================================
+# FUNÇÕES DE CÁLCULO
+# ==========================================
+
+def calcular_retornos(prices):
+    """Calcula retornos diários"""
     return prices.pct_change().dropna()
 
 
 def calcular_retorno_anual(weights, returns):
-    """
-    Calcula retorno anual esperado do portfólio
-    
-    Args:
-        weights: Array de pesos
-        returns: DataFrame de retornos
-        
-    Returns:
-        Float com retorno anualizado
-    """
+    """Calcula retorno anualizado"""
     return np.sum(returns.mean() * weights) * 252
 
 
 def calcular_volatilidade_anual(weights, returns):
-    """
-    Calcula volatilidade anual do portfólio
-    
-    Args:
-        weights: Array de pesos
-        returns: DataFrame de retornos
-        
-    Returns:
-        Float com volatilidade anualizada
-    """
+    """Calcula volatilidade anualizada"""
     cov_matrix = returns.cov() * 252
-    portfolio_variance = np.dot(weights.T, np.dot(cov_matrix, weights))
-    return np.sqrt(portfolio_variance)
+    variance = np.dot(weights.T, np.dot(cov_matrix, weights))
+    return np.sqrt(variance)
 
 
-def calcular_sharpe_ratio(weights, returns, risk_free_rate):
-    """
-    Calcula Sharpe Ratio do portfólio
-    
-    Args:
-        weights: Array de pesos
-        returns: DataFrame de retornos
-        risk_free_rate: Taxa livre de risco anual
-        
-    Returns:
-        Float com Sharpe Ratio
-    """
+def calcular_sharpe(weights, returns, rf_rate):
+    """Calcula Sharpe Ratio"""
     ret = calcular_retorno_anual(weights, returns)
     vol = calcular_volatilidade_anual(weights, returns)
-    return (ret - risk_free_rate) / vol
+    return (ret - rf_rate) / vol
 
 
 # ==========================================
-# FUNÇÕES DE OTIMIZAÇÃO
+# OTIMIZAÇÃO
 # ==========================================
 
-def otimizar_sharpe_maximo(returns, risk_free_rate):
+def otimizar_sharpe_maximo(returns, rf_rate):
     """
-    Encontra o portfólio com máximo Sharpe Ratio
+    Encontra portfólio de máximo Sharpe
     
     Args:
-        returns: DataFrame com retornos
-        risk_free_rate: Taxa livre de risco
+        returns: DataFrame de retornos
+        rf_rate: Taxa livre de risco
         
     Returns:
-        Tuple (pesos, métricas)
+        Tuple (weights_dict, metrics_dict)
     """
-    num_assets = len(returns.columns)
+    n_assets = len(returns.columns)
     
-    # Função objetivo: maximizar Sharpe = minimizar -Sharpe
-    def objective(weights):
-        return -calcular_sharpe_ratio(weights, returns, risk_free_rate)
+    def objetivo(weights):
+        return -calcular_sharpe(weights, returns, rf_rate)
     
-    # Restrições: soma dos pesos = 1
     constraints = {'type': 'eq', 'fun': lambda w: np.sum(w) - 1}
+    bounds = tuple((0, 1) for _ in range(n_assets))
+    initial = np.array([1/n_assets] * n_assets)
     
-    # Limites: cada peso entre 0 e 1
-    bounds = tuple((0, 1) for _ in range(num_assets))
-    
-    # Chute inicial: pesos iguais
-    initial_weights = np.array([1/num_assets] * num_assets)
-    
-    # Otimizar
     result = minimize(
-        objective,
-        initial_weights,
+        objetivo,
+        initial,
         method='SLSQP',
         bounds=bounds,
         constraints=constraints,
@@ -140,14 +140,12 @@ def otimizar_sharpe_maximo(returns, risk_free_rate):
     
     weights = result.x
     
-    # Calcular métricas
     metrics = {
         'return': calcular_retorno_anual(weights, returns),
         'volatility': calcular_volatilidade_anual(weights, returns),
-        'sharpe': calcular_sharpe_ratio(weights, returns, risk_free_rate)
+        'sharpe': calcular_sharpe(weights, returns, rf_rate)
     }
     
-    # Criar dicionário de pesos
     weights_dict = dict(zip(returns.columns, weights))
     
     return weights_dict, metrics
@@ -155,29 +153,26 @@ def otimizar_sharpe_maximo(returns, risk_free_rate):
 
 def otimizar_minima_volatilidade(returns):
     """
-    Encontra o portfólio com mínima volatilidade
+    Encontra portfólio de mínima volatilidade
     
     Args:
-        returns: DataFrame com retornos
+        returns: DataFrame de retornos
         
     Returns:
-        Tuple (pesos, métricas)
+        Tuple (weights_dict, metrics_dict)
     """
-    num_assets = len(returns.columns)
+    n_assets = len(returns.columns)
     
-    # Função objetivo: minimizar volatilidade
-    def objective(weights):
+    def objetivo(weights):
         return calcular_volatilidade_anual(weights, returns)
     
-    # Restrições
     constraints = {'type': 'eq', 'fun': lambda w: np.sum(w) - 1}
-    bounds = tuple((0, 1) for _ in range(num_assets))
-    initial_weights = np.array([1/num_assets] * num_assets)
+    bounds = tuple((0, 1) for _ in range(n_assets))
+    initial = np.array([1/n_assets] * n_assets)
     
-    # Otimizar
     result = minimize(
-        objective,
-        initial_weights,
+        objetivo,
+        initial,
         method='SLSQP',
         bounds=bounds,
         constraints=constraints,
@@ -189,11 +184,10 @@ def otimizar_minima_volatilidade(returns):
     
     weights = result.x
     
-    # Calcular métricas
     metrics = {
         'return': calcular_retorno_anual(weights, returns),
         'volatility': calcular_volatilidade_anual(weights, returns),
-        'sharpe': calcular_sharpe_ratio(weights, returns, 0.0)
+        'sharpe': calcular_sharpe(weights, returns, 0.0)
     }
     
     weights_dict = dict(zip(returns.columns, weights))
@@ -202,71 +196,48 @@ def otimizar_minima_volatilidade(returns):
 
 
 # ==========================================
-# FUNÇÕES DE SIMULAÇÃO
+# SIMULAÇÃO
 # ==========================================
 
-def simular_performance(weights_dict, prices, capital_inicial=10000):
+def simular_performance(weights_dict, prices, capital=10000):
     """
-    Simula a performance histórica de um portfólio
+    Simula performance histórica
     
     Args:
-        weights_dict: Dicionário {ticker: peso}
+        weights_dict: Dict com pesos
         prices: DataFrame com preços
-        capital_inicial: Capital inicial em R$
+        capital: Capital inicial
         
     Returns:
-        Series com valores do portfólio ao longo do tempo
+        Series com valores ao longo do tempo
     """
-    # Calcular retornos
-    returns = calcular_retornos_diarios(prices)
+    returns = calcular_retornos(prices)
     
-    # Criar array de pesos na ordem correta
     weights = np.array([weights_dict.get(col, 0) for col in returns.columns])
     
-    # Calcular retornos do portfólio
     portfolio_returns = returns.dot(weights)
     
-    # Calcular valor acumulado
-    cumulative_returns = (1 + portfolio_returns).cumprod()
-    portfolio_value = capital_inicial * cumulative_returns
+    portfolio_value = capital * (1 + portfolio_returns).cumprod()
     
     return portfolio_value
 
 
 def calcular_drawdown(portfolio_value):
-    """
-    Calcula o drawdown (queda do pico) do portfólio
-    
-    Args:
-        portfolio_value: Series com valores do portfólio
-        
-    Returns:
-        Series com drawdown percentual
-    """
-    cumulative_max = portfolio_value.cummax()
-    drawdown = (portfolio_value - cumulative_max) / cumulative_max
+    """Calcula drawdown"""
+    cummax = portfolio_value.cummax()
+    drawdown = (portfolio_value - cummax) / cummax
     return drawdown
 
 
 # ==========================================
-# FUNÇÕES DE VISUALIZAÇÃO
+# VISUALIZAÇÕES
 # ==========================================
 
-def criar_grafico_pizza(weights_dict, title):
-    """
-    Cria gráfico de pizza com composição do portfólio
+def criar_grafico_composicao(weights_dict, title):
+    """Gráfico de pizza da composição"""
     
-    Args:
-        weights_dict: Dicionário {ticker: peso}
-        title: Título do gráfico
-        
-    Returns:
-        Figura Plotly
-    """
-    # Filtrar pesos > 1%
+    # Filtrar > 1%
     weights_filtrado = {k: v for k, v in weights_dict.items() if v > 0.01}
-    
-    # Ordenar por peso
     weights_ordenado = dict(sorted(weights_filtrado.items(), key=lambda x: x[1], reverse=True))
     
     fig = go.Figure(data=[go.Pie(
@@ -274,7 +245,6 @@ def criar_grafico_pizza(weights_dict, title):
         values=list(weights_ordenado.values()),
         hole=0.3,
         textinfo='label+percent',
-        textposition='auto',
         hovertemplate='%{label}<br>%{value:.2%}<extra></extra>'
     )])
     
@@ -287,50 +257,40 @@ def criar_grafico_pizza(weights_dict, title):
     return fig
 
 
-def criar_grafico_barras_comparacao(weights_sharpe, weights_minvol):
-    """
-    Cria gráfico de barras comparando alocações
+def criar_grafico_barras(weights_sharpe, weights_minvol):
+    """Gráfico de barras comparativo"""
     
-    Args:
-        weights_sharpe: Pesos do portfólio Sharpe
-        weights_minvol: Pesos do portfólio MinVol
-        
-    Returns:
-        Figura Plotly
-    """
-    # Obter todos os tickers
     all_tickers = sorted(set(list(weights_sharpe.keys()) + list(weights_minvol.keys())))
     
-    # Preparar dados
     sharpe_values = [weights_sharpe.get(t, 0) * 100 for t in all_tickers]
     minvol_values = [weights_minvol.get(t, 0) * 100 for t in all_tickers]
     
-    # Filtrar apenas ativos com peso > 1% em algum portfólio
-    filtered_data = [(t, s, m) for t, s, m in zip(all_tickers, sharpe_values, minvol_values) if s > 1 or m > 1]
+    # Filtrar > 1%
+    filtered = [(t, s, m) for t, s, m in zip(all_tickers, sharpe_values, minvol_values) if s > 1 or m > 1]
     
-    if filtered_data:
-        tickers_filtered, sharpe_filtered, minvol_filtered = zip(*filtered_data)
-    else:
-        tickers_filtered, sharpe_filtered, minvol_filtered = [], [], []
+    if not filtered:
+        return None
+    
+    tickers, sharpe_vals, minvol_vals = zip(*filtered)
     
     fig = go.Figure()
     
     fig.add_trace(go.Bar(
         name='Máximo Sharpe',
-        x=list(tickers_filtered),
-        y=list(sharpe_filtered),
+        x=list(tickers),
+        y=list(sharpe_vals),
         marker_color='#3498db'
     ))
     
     fig.add_trace(go.Bar(
         name='Mínima Volatilidade',
-        x=list(tickers_filtered),
-        y=list(minvol_filtered),
+        x=list(tickers),
+        y=list(minvol_vals),
         marker_color='#2ecc71'
     ))
     
     fig.update_layout(
-        title='Comparação de Alocação por Ativo',
+        title='Comparação de Alocação',
         xaxis_title='Ativo',
         yaxis_title='Alocação (%)',
         barmode='group',
@@ -342,16 +302,8 @@ def criar_grafico_barras_comparacao(weights_sharpe, weights_minvol):
 
 
 def criar_grafico_performance(value_sharpe, value_minvol):
-    """
-    Cria gráfico de performance histórica
+    """Gráfico de performance histórica"""
     
-    Args:
-        value_sharpe: Series com valores do portfólio Sharpe
-        value_minvol: Series com valores do portfólio MinVol
-        
-    Returns:
-        Figura Plotly
-    """
     fig = go.Figure()
     
     fig.add_trace(go.Scatter(
@@ -373,33 +325,20 @@ def criar_grafico_performance(value_sharpe, value_minvol):
     ))
     
     fig.update_layout(
-        title='Performance Histórica dos Portfólios',
+        title='Performance Histórica',
         xaxis_title='Data',
         yaxis_title='Valor do Portfólio (R$)',
         height=500,
         hovermode='x unified',
-        legend=dict(
-            yanchor="top",
-            y=0.99,
-            xanchor="left",
-            x=0.01
-        )
+        legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
     )
     
     return fig
 
 
 def criar_grafico_drawdown(dd_sharpe, dd_minvol):
-    """
-    Cria gráfico de drawdown
+    """Gráfico de drawdown"""
     
-    Args:
-        dd_sharpe: Series com drawdown do Sharpe
-        dd_minvol: Series com drawdown do MinVol
-        
-    Returns:
-        Figura Plotly
-    """
     fig = go.Figure()
     
     fig.add_trace(go.Scatter(
@@ -438,85 +377,84 @@ def criar_grafico_drawdown(dd_sharpe, dd_minvol):
 # ==========================================
 
 def main():
-    """Função principal da página"""
+    """Função principal"""
     
     st.title("⚖️ Sharpe vs Mínima Volatilidade")
-    st.markdown("Comparação detalhada entre duas estratégias de otimização de portfólio")
+    st.markdown("Comparação detalhada entre duas estratégias de otimização")
     st.markdown("---")
     
-    # Verificar se há ativos selecionados
+    # Verificar portfólio
     if not st.session_state.portfolio_tickers:
-        st.warning("⚠️ Nenhum ativo selecionado")
-        st.info("👉 Vá para a página **Selecionar Ativos** para escolher os ativos do seu portfólio")
+        st.warning("⚠️ Nenhum ativo no portfólio")
+        st.info("👉 Vá para **Selecionar Ativos** primeiro")
         st.stop()
     
     if len(st.session_state.portfolio_tickers) < 2:
-        st.warning("⚠️ Selecione pelo menos 2 ativos para otimização")
+        st.warning("⚠️ Selecione pelo menos 2 ativos")
         st.stop()
     
-    # Sidebar com configurações
+    # Sidebar
     with st.sidebar:
         st.header("⚙️ Configurações")
         
-        st.subheader("📅 Período de Análise")
+        # Cache info
+        from core.cache import info_cache
+        cache_info = info_cache()
+        if cache_info['entries'] > 0:
+            st.success(f"📦 {cache_info['entries']} cache(s)")
+            if st.button("🗑️ Limpar Cache"):
+                from core.cache import limpar_cache
+                limpar_cache()
+                st.rerun()
+        
+        st.markdown("---")
+        
+        st.subheader("📅 Período")
         
         col1, col2 = st.columns(2)
         
         with col1:
-            data_inicio = st.date_input(
-                "Data Inicial",
-                value=st.session_state.period_start,
-                key="data_inicio_sharpe"
-            )
+            start = st.date_input("Início", value=st.session_state.period_start)
         
         with col2:
-            data_fim = st.date_input(
-                "Data Final",
-                value=st.session_state.period_end,
-                key="data_fim_sharpe"
-            )
+            end = st.date_input("Fim", value=st.session_state.period_end)
         
-        # Atualizar session state
-        st.session_state.period_start = datetime.combine(data_inicio, datetime.min.time())
-        st.session_state.period_end = datetime.combine(data_fim, datetime.min.time())
+        st.session_state.period_start = datetime.combine(start, datetime.min.time())
+        st.session_state.period_end = datetime.combine(end, datetime.min.time())
         
         st.markdown("---")
         
         st.subheader("💰 Parâmetros")
         
-        taxa_livre_risco = st.number_input(
+        rf_rate = st.number_input(
             "Taxa Livre de Risco (anual)",
             min_value=0.0,
             max_value=1.0,
             value=st.session_state.risk_free_rate,
             step=0.0001,
-            format="%.4f",
-            help="Taxa CDI ou Selic anualizada"
+            format="%.4f"
         )
-        st.session_state.risk_free_rate = taxa_livre_risco
+        st.session_state.risk_free_rate = rf_rate
         
-        capital_inicial = st.number_input(
+        capital = st.number_input(
             "Capital Inicial (R$)",
             min_value=1000.0,
-            max_value=10000000.0,
             value=10000.0,
-            step=1000.0,
-            format="%.2f"
+            step=1000.0
         )
         
         st.markdown("---")
         
-        # Botão de análise
-        btn_analisar = st.button(
-            "🔄 Analisar Portfólios",
+        btn_calcular = st.button(
+            "🔄 Calcular",
             type="primary",
             use_container_width=True
         )
     
-    # Mostrar informações dos ativos selecionados
-    st.info(f"📊 **{len(st.session_state.portfolio_tickers)} ativos** selecionados para análise")
+    # Info
+    st.info(f"📊 **{len(st.session_state.portfolio_tickers)} ativos** selecionados")
     
-    with st.expander("📋 Ver lista de ativos"):
+    with st.expander("📋 Ver lista"):
         cols = st.columns(5)
         for idx, ticker in enumerate(st.session_state.portfolio_tickers):
             with cols[idx % 5]:
@@ -524,215 +462,171 @@ def main():
     
     st.markdown("---")
     
-    # Executar análise quando botão for pressionado
-    if btn_analisar:
+    # Calcular
+    if btn_calcular:
         
-        # Carregar dados
-        with st.spinner("📥 Carregando dados históricos..."):
-            try:
-                prices = data.get_price_history(
-                    st.session_state.portfolio_tickers,
-                    st.session_state.period_start,
-                    st.session_state.period_end,
-                    use_cache=False
-                )
-                
-                if prices.empty:
-                    st.error("❌ Não foi possível carregar os dados. Tente novamente.")
-                    st.stop()
-                
-                # Limpar dados
-                prices = prices.dropna(axis=1, thresh=len(prices) * 0.8)
-                prices = prices.fillna(method='ffill').fillna(method='bfill')
-                
-                if prices.empty or len(prices.columns) < 2:
-                    st.error("❌ Dados insuficientes após limpeza")
-                    st.stop()
-                
-                st.success(f"✅ Dados carregados: **{len(prices)} dias** de histórico para **{len(prices.columns)} ativos**")
-                
-            except Exception as e:
-                st.error(f"❌ Erro ao carregar dados: {str(e)}")
-                st.stop()
+        # Carregar dados COM CACHE
+        price_data = carregar_dados_com_cache(
+            st.session_state.portfolio_tickers,
+            st.session_state.period_start,
+            st.session_state.period_end
+        )
+        
+        if price_data is None or price_data.empty:
+            st.error("❌ Não foi possível carregar dados")
+            st.stop()
+        
+        # Limpar
+        price_data = price_data.dropna(axis=1, thresh=len(price_data) * 0.8)
+        
+        if price_data.empty or len(price_data.columns) < 2:
+            st.error("❌ Dados insuficientes")
+            st.stop()
+        
+        st.success(f"✓ {len(price_data)} dias, {len(price_data.columns)} ativos")
         
         # Calcular retornos
         with st.spinner("📊 Calculando retornos..."):
-            returns = calcular_retornos_diarios(prices)
+            returns = calcular_retornos(price_data)
         
-        # Otimizar portfólios
-        st.subheader("🎯 Otimização de Portfólios")
+        # Otimizar
+        st.subheader("🎯 Otimização")
         
         col1, col2 = st.columns(2)
         
         with col1:
-            with st.spinner("Otimizando Máximo Sharpe..."):
-                weights_sharpe, metrics_sharpe = otimizar_sharpe_maximo(returns, taxa_livre_risco)
+            with st.spinner("Otimizando Sharpe..."):
+                weights_sharpe, metrics_sharpe = otimizar_sharpe_maximo(returns, rf_rate)
                 
-                if weights_sharpe is None:
-                    st.error("❌ Falha na otimização do Sharpe")
-                else:
+                if weights_sharpe:
                     st.success("✅ Sharpe otimizado")
+                else:
+                    st.error("❌ Falha na otimização")
         
         with col2:
-            with st.spinner("Otimizando Mínima Volatilidade..."):
+            with st.spinner("Otimizando MinVol..."):
                 weights_minvol, metrics_minvol = otimizar_minima_volatilidade(returns)
                 
-                if weights_minvol is None:
-                    st.error("❌ Falha na otimização MinVol")
-                else:
+                if weights_minvol:
                     st.success("✅ MinVol otimizado")
+                else:
+                    st.error("❌ Falha na otimização")
         
-        if weights_sharpe is None or weights_minvol is None:
+        if not weights_sharpe or not weights_minvol:
             st.stop()
         
         st.markdown("---")
         
-        # Exibir métricas
-        st.header("📈 Métricas dos Portfólios")
+        # Métricas
+        st.header("📈 Métricas")
         
         col1, col2 = st.columns(2)
         
         with col1:
-            st.subheader("🎯 Máximo Sharpe Ratio")
+            st.subheader("🎯 Máximo Sharpe")
             
-            metric_cols = st.columns(3)
-            with metric_cols[0]:
-                st.metric(
-                    "Retorno Anual",
-                    f"{metrics_sharpe['return']:.2%}",
-                    help="Retorno esperado anualizado"
-                )
-            with metric_cols[1]:
-                st.metric(
-                    "Volatilidade",
-                    f"{metrics_sharpe['volatility']:.2%}",
-                    help="Risco anualizado"
-                )
-            with metric_cols[2]:
-                st.metric(
-                    "Sharpe Ratio",
-                    f"{metrics_sharpe['sharpe']:.3f}",
-                    help="Retorno ajustado ao risco"
-                )
+            subcol1, subcol2, subcol3 = st.columns(3)
+            with subcol1:
+                st.metric("Retorno", f"{metrics_sharpe['return']:.2%}")
+            with subcol2:
+                st.metric("Volatilidade", f"{metrics_sharpe['volatility']:.2%}")
+            with subcol3:
+                st.metric("Sharpe", f"{metrics_sharpe['sharpe']:.3f}")
         
         with col2:
             st.subheader("🛡️ Mínima Volatilidade")
             
-            metric_cols = st.columns(3)
-            with metric_cols[0]:
-                st.metric(
-                    "Retorno Anual",
-                    f"{metrics_minvol['return']:.2%}",
-                    help="Retorno esperado anualizado"
-                )
-            with metric_cols[1]:
-                st.metric(
-                    "Volatilidade",
-                    f"{metrics_minvol['volatility']:.2%}",
-                    help="Risco anualizado"
-                )
-            with metric_cols[2]:
-                st.metric(
-                    "Sharpe Ratio",
-                    f"{metrics_minvol['sharpe']:.3f}",
-                    help="Retorno ajustado ao risco"
-                )
+            subcol1, subcol2, subcol3 = st.columns(3)
+            with subcol1:
+                st.metric("Retorno", f"{metrics_minvol['return']:.2%}")
+            with subcol2:
+                st.metric("Volatilidade", f"{metrics_minvol['volatility']:.2%}")
+            with subcol3:
+                st.metric("Sharpe", f"{metrics_minvol['sharpe']:.3f}")
         
         st.markdown("---")
         
-        # Gráficos de composição
-        st.header("🥧 Composição dos Portfólios")
+        # Composição
+        st.header("🥧 Composição")
         
         col1, col2 = st.columns(2)
         
         with col1:
-            fig_pizza_sharpe = criar_grafico_pizza(weights_sharpe, "Máximo Sharpe")
-            st.plotly_chart(fig_pizza_sharpe, use_container_width=True)
+            fig = criar_grafico_composicao(weights_sharpe, "Máximo Sharpe")
+            st.plotly_chart(fig, use_container_width=True)
         
         with col2:
-            fig_pizza_minvol = criar_grafico_pizza(weights_minvol, "Mínima Volatilidade")
-            st.plotly_chart(fig_pizza_minvol, use_container_width=True)
+            fig = criar_grafico_composicao(weights_minvol, "Mínima Volatilidade")
+            st.plotly_chart(fig, use_container_width=True)
         
-        # Gráfico de barras comparativo
-        fig_barras = criar_grafico_barras_comparacao(weights_sharpe, weights_minvol)
-        st.plotly_chart(fig_barras, use_container_width=True)
+        # Comparação
+        fig = criar_grafico_barras(weights_sharpe, weights_minvol)
+        if fig:
+            st.plotly_chart(fig, use_container_width=True)
         
         st.markdown("---")
         
-        # Simulação de performance
+        # Performance
         st.header("📊 Performance Histórica")
         
-        with st.spinner("Simulando performance..."):
-            value_sharpe = simular_performance(weights_sharpe, prices, capital_inicial)
-            value_minvol = simular_performance(weights_minvol, prices, capital_inicial)
+        with st.spinner("Simulando..."):
+            value_sharpe = simular_performance(weights_sharpe, price_data, capital)
+            value_minvol = simular_performance(weights_minvol, price_data, capital)
         
-        # Gráfico de performance
-        fig_performance = criar_grafico_performance(value_sharpe, value_minvol)
-        st.plotly_chart(fig_performance, use_container_width=True)
+        fig = criar_grafico_performance(value_sharpe, value_minvol)
+        st.plotly_chart(fig, use_container_width=True)
         
-        # Métricas de performance
+        # Valores finais
         col1, col2 = st.columns(2)
         
         with col1:
-            valor_final_sharpe = value_sharpe.iloc[-1]
-            retorno_total_sharpe = (valor_final_sharpe / capital_inicial - 1) * 100
-            
+            final_sharpe = value_sharpe.iloc[-1]
+            ret_sharpe = (final_sharpe / capital - 1) * 100
             st.metric(
-                "Valor Final - Máximo Sharpe",
-                f"R$ {valor_final_sharpe:,.2f}",
-                f"{retorno_total_sharpe:+.2f}%",
-                delta_color="normal"
+                "Valor Final - Sharpe",
+                f"R$ {final_sharpe:,.2f}",
+                f"{ret_sharpe:+.2f}%"
             )
         
         with col2:
-            valor_final_minvol = value_minvol.iloc[-1]
-            retorno_total_minvol = (valor_final_minvol / capital_inicial - 1) * 100
-            
+            final_minvol = value_minvol.iloc[-1]
+            ret_minvol = (final_minvol / capital - 1) * 100
             st.metric(
-                "Valor Final - Mínima Volatilidade",
-                f"R$ {valor_final_minvol:,.2f}",
-                f"{retorno_total_minvol:+.2f}%",
-                delta_color="normal"
+                "Valor Final - MinVol",
+                f"R$ {final_minvol:,.2f}",
+                f"{ret_minvol:+.2f}%"
             )
         
         st.markdown("---")
         
-        # Análise de drawdown
+        # Drawdown
         st.header("📉 Análise de Drawdown")
         
         dd_sharpe = calcular_drawdown(value_sharpe)
         dd_minvol = calcular_drawdown(value_minvol)
         
-        fig_drawdown = criar_grafico_drawdown(dd_sharpe, dd_minvol)
-        st.plotly_chart(fig_drawdown, use_container_width=True)
+        fig = criar_grafico_drawdown(dd_sharpe, dd_minvol)
+        st.plotly_chart(fig, use_container_width=True)
         
         col1, col2 = st.columns(2)
         
         with col1:
             max_dd_sharpe = dd_sharpe.min() * 100
-            st.metric(
-                "Máximo Drawdown - Sharpe",
-                f"{max_dd_sharpe:.2f}%",
-                help="Maior queda do pico histórico"
-            )
+            st.metric("Máximo DD - Sharpe", f"{max_dd_sharpe:.2f}%")
         
         with col2:
             max_dd_minvol = dd_minvol.min() * 100
-            st.metric(
-                "Máximo Drawdown - MinVol",
-                f"{max_dd_minvol:.2f}%",
-                help="Maior queda do pico histórico"
-            )
+            st.metric("Máximo DD - MinVol", f"{max_dd_minvol:.2f}%")
         
         st.markdown("---")
         
-        # Tabela comparativa final
-        st.header("📋 Resumo Comparativo")
+        # Tabela resumo
+        st.header("📋 Resumo")
         
-        df_comparacao = pd.DataFrame({
+        df_resumo = pd.DataFrame({
             'Métrica': [
                 'Retorno Anual',
-                'Volatilidade Anual',
+                'Volatilidade',
                 'Sharpe Ratio',
                 'Valor Final',
                 'Retorno Total',
@@ -742,60 +636,24 @@ def main():
                 f"{metrics_sharpe['return']:.2%}",
                 f"{metrics_sharpe['volatility']:.2%}",
                 f"{metrics_sharpe['sharpe']:.3f}",
-                f"R$ {valor_final_sharpe:,.2f}",
-                f"{retorno_total_sharpe:+.2f}%",
+                f"R$ {final_sharpe:,.2f}",
+                f"{ret_sharpe:+.2f}%",
                 f"{max_dd_sharpe:.2f}%"
             ],
             'Mínima Volatilidade': [
                 f"{metrics_minvol['return']:.2%}",
                 f"{metrics_minvol['volatility']:.2%}",
                 f"{metrics_minvol['sharpe']:.3f}",
-                f"R$ {valor_final_minvol:,.2f}",
-                f"{retorno_total_minvol:+.2f}%",
+                f"R$ {final_minvol:,.2f}",
+                f"{ret_minvol:+.2f}%",
                 f"{max_dd_minvol:.2f}%"
             ]
         })
         
-        st.dataframe(
-            df_comparacao,
-            use_container_width=True,
-            hide_index=True
-        )
+        st.dataframe(df_resumo, use_container_width=True, hide_index=True)
     
     else:
-        # Mensagem quando não há análise
-        st.info("👈 Configure os parâmetros na barra lateral e clique em **Analisar Portfólios** para começar")
-        
-        # Informações sobre a página
-        with st.expander("ℹ️ Sobre esta análise"):
-            st.markdown("""
-            ### Portfólio de Máximo Sharpe Ratio
-            
-            O **Sharpe Ratio** mede o retorno excedente por unidade de risco. Um portfólio com máximo Sharpe 
-            oferece a melhor relação risco-retorno possível.
-            
-            **Ideal para:**
-            - Investidores que buscam eficiência
-            - Maximizar retorno ajustado ao risco
-            - Perfil moderado a agressivo
-            
-            ### Portfólio de Mínima Volatilidade
-            
-            Este portfólio busca **minimizar o risco** (volatilidade), independente do retorno. 
-            Resulta na carteira mais estável possível.
-            
-            **Ideal para:**
-            - Investidores conservadores
-            - Preservação de capital
-            - Menor exposição a quedas
-            
-            ### Como interpretar
-            
-            - **Retorno Anual**: Ganho esperado em um ano
-            - **Volatilidade**: Medida de risco (quanto maior, mais instável)
-            - **Sharpe Ratio**: Quanto maior, melhor a relação risco-retorno
-            - **Drawdown**: Maior queda do valor do pico até o vale
-            """)
+        st.info("👈 Configure os parâmetros e clique em **Calcular**")
 
 
 if __name__ == "__main__":
